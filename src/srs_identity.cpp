@@ -18,6 +18,8 @@ using namespace Rcpp;
 //' file and put it into a file on your hard drive somewhere.  That file is the
 //' input to this function.
 //'
+//' Note that it would not be too hard to modify this to deal with multiple alleles.
+//'
 //' If you had all your data in a VCF file called raw.vcf, here is how you would
 //' process it:
 //'
@@ -137,7 +139,7 @@ List srs_identity(CharacterVector file,
   // open up a stream to read from the file
   std::ifstream infile (fname.c_str());
 
-  ////////// this code goes line through line in the file and samples //////////
+  ////////// this code goes line by line in the file and samples //////////
   ////////// a single read from each indiv                            //////////
   while (std::getline(infile, line)) {
     std::stringstream ss(line);
