@@ -4,17 +4,25 @@
 \alias{srs_identity}
 \title{Compute relative ibd measures from single read sampling}
 \usage{
-srs_identity(file, groups, sample_names, BootReps, freq_thresh = 0)
+srs_identity(file, pops_of_indivs, num_pops, num_internal_nodes, daughters,
+  sample_names, BootReps)
 }
 \arguments{
 \item{file}{path to the file that holds the Chrom, Pos, [AD] file (i.e. allele_depths.txt
 in the description above).}
 
+\item{pops_of_indivs}{a vector of 0-based indices of the populations each of the individuals
+belongs to. Must be in the order that individuals appear in the VCF file.}
+
+\item{num_pops}{The number of internal nodes in the tree that are directly above the individuals.}
+
+\item{num_internal_nodes}{the number of internal nodes in the tree (this includes the populations)}
+
+\item{daughters}{a list of vectors.  Each one is the 0-based indexes of the daughters
+of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).}
+
 \item{sample_names}{A character vector of the names of the sample, in the
 order they appear in the VCF file.}
-
-\item{freq_thresh}{loci with the frequency of either allele estimated (by the fraction
-of sampled single reads of each type) less than freq_thresh will not be used.}
 }
 \value{
 This passes back a list of information about the various allele
@@ -34,6 +42,8 @@ if you have them).  You must do all the filtering you want to do on your VCF fil
 (using bcftools, for example) and then you have to extract the read depths from that
 file and put it into a file on your hard drive somewhere.  That file is the
 input to this function.
+
+Note that it would not be too hard to modify this to deal with multiple alleles.
 
 If you had all your data in a VCF file called raw.vcf, here is how you would
 process it:

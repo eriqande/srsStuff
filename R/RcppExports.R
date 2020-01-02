@@ -73,6 +73,8 @@ srs_covar <- function(file, sample_names, freq_thresh = 0.0) {
 #' file and put it into a file on your hard drive somewhere.  That file is the
 #' input to this function.
 #'
+#' Note that it would not be too hard to modify this to deal with multiple alleles.
+#'
 #' If you had all your data in a VCF file called raw.vcf, here is how you would
 #' process it:
 #'
@@ -105,18 +107,21 @@ srs_covar <- function(file, sample_names, freq_thresh = 0.0) {
 #'
 #' @param file path to the file that holds the Chrom, Pos, [AD] file (i.e. allele_depths.txt
 #' in the description above).
+#' @param pops_of_indivs a vector of 0-based indices of the populations each of the individuals
+#' belongs to. Must be in the order that individuals appear in the VCF file.
+#' @param num_pops The number of internal nodes in the tree that are directly above the individuals.
+#' @param num_internal_nodes the number of internal nodes in the tree (this includes the populations)
+#' @param daughters a list of vectors.  Each one is the 0-based indexes of the daughters
+#' of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).
 #' @param sample_names A character vector of the names of the sample, in the
 #' order they appear in the VCF file.
-#' @param freq_thresh loci with the frequency of either allele estimated (by the fraction
-#' of sampled single reads of each type) less than freq_thresh will not be used.
-#'
 #' @return This passes back a list of information about the various allele
 #' sharing statistics (and, eventually bootstrap information) that can be
 #' used by a higher-level function to compute the F-statistics, etc.
 #'
 #'
 #' @export
-srs_identity <- function(file, groups, sample_names, BootReps, freq_thresh = 0.0) {
-    .Call(`_srsStuff_srs_identity`, file, groups, sample_names, BootReps, freq_thresh)
+srs_identity <- function(file, pops_of_indivs, num_pops, num_internal_nodes, daughters, sample_names, BootReps) {
+    .Call(`_srsStuff_srs_identity`, file, pops_of_indivs, num_pops, num_internal_nodes, daughters, sample_names, BootReps)
 }
 

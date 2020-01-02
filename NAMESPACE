@@ -2,5 +2,6 @@
 
 export(srs_covar)
 export(srs_identity)
+export(tib2dot)
 importFrom(Rcpp,sourceCpp)
 useDynLib(srsStuff, .registration = TRUE)

@@ -52,11 +52,14 @@ using namespace Rcpp;
 //'
 //' @param file path to the file that holds the Chrom, Pos, [AD] file (i.e. allele_depths.txt
 //' in the description above).
+//' @param pops_of_indivs a vector of 0-based indices of the populations each of the individuals
+//' belongs to. Must be in the order that individuals appear in the VCF file.
+//' @param num_pops The number of internal nodes in the tree that are directly above the individuals.
+//' @param num_internal_nodes the number of internal nodes in the tree (this includes the populations)
+//' @param daughters a list of vectors.  Each one is the 0-based indexes of the daughters
+//' of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).
 //' @param sample_names A character vector of the names of the sample, in the
 //' order they appear in the VCF file.
-//' @param freq_thresh loci with the frequency of either allele estimated (by the fraction
-//' of sampled single reads of each type) less than freq_thresh will not be used.
-//'
 //' @return This passes back a list of information about the various allele
 //' sharing statistics (and, eventually bootstrap information) that can be
 //' used by a higher-level function to compute the F-statistics, etc.
@@ -65,11 +68,13 @@ using namespace Rcpp;
 //' @export
 // [[Rcpp::export]]
 List srs_identity(CharacterVector file,
-               List groups,
-               CharacterVector sample_names,
-               int BootReps,
-               double freq_thresh = 0.0) {
-  int comma, i, j, r;
+                  IntegerVector pops_of_indivs,
+                  int num_pops,
+                  int num_internal_nodes,
+                  List daughters,
+                  CharacterVector sample_names,
+                  int BootReps) {
+  int comma, i, j, r, k, d, dp, k1, k2;
   std::string tempstr;
   std::string line;
   std::string Chrom;
@@ -79,62 +84,60 @@ List srs_identity(CharacterVector file,
   int N = 0; // counts the individuals
   int L = -1; // counts the markers
   int rdr, rda; // read depth ref / read depth alt
-  IntegerVector alleles(sample_names.size());  // one for each sample, -1 = no read; 0 = ref; 1 =
-  IntegerMatrix allele_mat(BootReps, sample_names.size());
+  IntegerVector alleles(pops_of_indivs.size());  // one for each sample, -1 = no read; 0 = ref; 1 =
+  IntegerMatrix allele_mat(BootReps, pops_of_indivs.size());
   int totAlt, totNotMissing; // for computing allele frequency from single reads
-  int NumLociAllMissing = 0;  // keep track of how many loci have no reads at any individuals
-  int NumLociMonomorphic = 0; // keep track of how many loci were monomorphic after read sampling. These can't be used
-  int NumLociPolymorph = 0;  // how many markers were not missing at everyone and were polymorphic after sampling
-  int NumLociSuitableMAF = 0; // how many polymorphic markers had high enough MAF?
-  int NumLociTooLowFreq = 0; // How many polymorphic sites were skipped cuz of low MAF?
+  double denom;
 
   // Stuff for keeping track of which individuals have reads of both alleles
-  IntegerVector hetIdxs(sample_names.size());
-  IntegerVector hetFlags(sample_names.size());
+  IntegerVector hetIdxs(pops_of_indivs.size());   // vector of length num_indivs, but we only use the first numHets elements, where
+                                                  // numHets is the number of individuals with reads of both alleles at this locus.
+                                                  // It stores the idxs of the individuals that have reads of both alleles at the locus.
+  IntegerVector hetFlags(pops_of_indivs.size());  // vector of length num_indivs, each element 0, or, if indiv has reads from each allele it's a 1
   int numHets;
 
+  // Here are things for the fixed counts of 0's and 1's in populations, and also
+  // the Randomized counts from Het Sampling.
+  IntegerVector Fixed0s(num_pops);
+  IntegerVector Fixed1s(num_pops);
+  IntegerMatrix Rando0s(BootReps, num_pops);
+  IntegerMatrix Rando1s(BootReps, num_pops);
 
-  // here is a bunch of stuff for dealing with different levels of identity
-  int num_id_levs = groups.length();
-  if(num_id_levs < 2) Rcpp::stop("Hey, you have to have at least two levels of groups (indivs + pops)");
-  IntegerVector id_lev_lengths(num_id_levs);
-  IntegerVector lev_vec;
+  // Here are the YO and Y1 matrices which will be used for each locus
+  // to count up the number of alleles beneath each internal node
+  NumericMatrix Y0(BootReps, num_internal_nodes);
+  NumericMatrix Y1(BootReps, num_internal_nodes);
+  IntegerVector Ytot0(BootReps);  // these next two are for counting or 0s and 1s over all population in each boot rep
+  IntegerVector Ytot1(BootReps);  // so as to ignore reps in which there is no variation.
 
-  // and this is for counting up the number of different
-  // alleles in different bins in different hierarchical levels
+  // This is what we will end up returning.  Note, the first row will be the actual estimate
+  // and we will effect that by setting bootn[0] = 1L for that always
+  NumericMatrix zsum(BootReps, num_internal_nodes);
 
-  // Here, declare matrices to send some information back
-  NumericMatrix retCov(sample_names.size(), sample_names.size());
-  NumericMatrix retIBS(sample_names.size(), sample_names.size());
-  NumericMatrix retM(sample_names.size(), sample_names.size());  // number non-missing + polymorphic loci
-  // initialize those to 0.0s.  Rcpp11 has a nicer constructor, but not here, apparently.
-  for(i=0;i<sample_names.size();i++) {
-    for(j=0;j<sample_names.size();j++) {
-      retCov(i,j) = 0.0;
-      retIBS(i,j) = 0.0;
-      retM(i,j) = 0.0;
+  // And here we have a matrix to store the number of loci (L) to divide
+  // each zsum by.  (It can vary across nodes/pops and reps, so we keep
+  // a whole matrix of these)
+  IntegerMatrix zL(BootReps, num_internal_nodes);
+
+  // initialize both of those to 0.0s.  Rcpp11 has a nicer constructor, but not here, apparently.
+  for(i=0;i<BootReps;i++) {
+    for(j=0;j<num_internal_nodes;j++) {
+      zsum(i,j) = 0.0;
+      zL(i, j) = 0L;
     }
   }
 
 
-  // compile information about how many elements are in each level of
-  // the hierarchy of pops/regions/etc. for the identity stuff. And also
-  // allocate memory for counting up 0 and 1 alleles in each of the
-  // bins at each of the hierarhical levels
-  std::vector< IntegerMatrix > bin_counts(num_id_levs) ;
-  for(i=0;i<num_id_levs;i++) {
-    lev_vec = as<IntegerVector>(groups[i]);
-    id_lev_lengths(i) = lev_vec.length();
-    bin_counts[i] = IntegerMatrix(id_lev_lengths(i), 2);
-  }
 
-  // Here are things for the fixed counts of 0's and 1's in populations, and also
-  // the Randomized counts from Het Sampling.
-  IntegerVector Fixed0s(id_lev_lengths(1));
-  IntegerVector Fixed1s(id_lev_lengths(1));
-  IntegerMatrix Rando0s(BootReps, id_lev_lengths(1));
-  IntegerMatrix Rando1s(BootReps, id_lev_lengths(1));
+  // This is to hold the number of times the current locus is selected
+  // for use in each of the BootReps bootstrap replicates.
+  IntegerVector bootn(BootReps);
 
+  double zbar;  // a temp variable that we will want to use to store things.
+
+  IntegerVector daught;  // to hold the results that come out of the daughters list for each level
+  int ndaught; // to store the number of daughters
+  int npairs; // to store the number of pairs of daughters
 
   // open up a stream to read from the file
   std::ifstream infile (fname.c_str());
@@ -153,13 +156,13 @@ List srs_identity(CharacterVector file,
     totAlt = 0;
     totNotMissing = 0;
     numHets = 0;
-    Rcpp::Rcout << "Entering Row\n";
+    //Rcpp::Rcout << "Entering Row\n";
     while(ss >> word) {
       N++;  // for keeping track of which individual we are on.
 
-      if(N + 1 > sample_names.size()) {
-        Rcpp::Rcerr << "At Chrom:Pos " << Chrom << ":" << Pos << " have read " << N + 1 << " samples. Which is greater than  " <<  sample_names.size() << " from sample_names\n";
-        Rcpp::stop("Insufficient number of sample names.  Bailing out!");
+      if(N + 1 > pops_of_indivs.size()) {
+        Rcpp::Rcerr << "At Chrom:Pos " << Chrom << ":" << Pos << " have read " << N + 1 << " samples. Which is greater than  " <<  pops_of_indivs.size() << " from pops_of_indivs\n";
+        Rcpp::stop("Insufficient number of pops_of_indivs.  Bailing out!");
       }
 
       if(word == ".") {  // no reads from the individual at this site
@@ -173,22 +176,19 @@ List srs_identity(CharacterVector file,
       // at this point, rda and rdr are the read depths for individual N at marker L
       // (both of which are base-0 indexed.)
 
-      // now we sample one of the reads
+      // now we sample one of the reads.  This is a little weird looking.  For individuals that
+      // have only one type of read (or none) we just put their values into the first row of allele_mat.
       hetFlags(N) = 0L;
       if(rdr == 0 && rda == 0) {
-        alleles[N] = -1;
-        allele_mat(0, N) = -1;
+        allele_mat(0, N) = -1L;
       } else if(rdr > 0 && rda == 0) {
-        alleles[N] = 0;
-        allele_mat(0, N) = 0;
+        allele_mat(0, N) = 0L;
       } else if(rdr == 0 && rda > 0) {
-        alleles[N] = 1;
-        allele_mat(0, N) = 1;
+        allele_mat(0, N) = 1L;
       } else {
-        alleles[N] = runif(1, 0, 1)[0] < ((double) rda / (rdr + rda)); // sample alternate allele with prob rda/(rda+rdr)
         allele_mat(_, N) = runif(BootReps, 0, 1) < ((double) rda / (rdr + rda)); // sample alternate allele with prob rda/(rda+rdr)
-        hetIdxs(numHets) = N;
-        hetFlags(numHets++) = 1L;
+        hetIdxs(numHets++) = N;
+        hetFlags(N) = 1L;
       }
 
       if(alleles[N] != -1) {
@@ -201,25 +201,18 @@ List srs_identity(CharacterVector file,
     N++;  // add one at the end.
 
     // throw an error if we didn't get the number expected.
-    if(N != sample_names.size()) {
-      Rcpp::Rcerr << "At Chrom:Pos " << Chrom << ":" << Pos << " just read " << N << " samples. Expected " <<  sample_names.size() << " from sample_names\n";
+    if(N != pops_of_indivs.size()) {
+      Rcpp::Rcerr << "At Chrom:Pos " << Chrom << ":" << Pos << " just read " << N << " samples. Expected " <<  pops_of_indivs.size() << " from pops_of_indivs\n";
       Rcpp::stop("Didn't find the right number of samples.");
     }
 
-    // Now, only the do the next parts for markers that are not all missing and are polymorphic
-    if(totNotMissing == 0) {
-      NumLociAllMissing++;
-    } else if(totAlt == 0 || totAlt == totNotMissing) {
-      NumLociMonomorphic++;
-    } else {
-      NumLociPolymorph++;
 
       ///////////////////  HERE IS WHERE THE ACTUAL CALCULATIONS FOR EACH LOCUS OCCUR /////////
 
       // First we compute the Fixed and Rando counts for the populations (first level above individuals)
       // zero out to accumulate sums
       //Rcpp::Rcout << "Zeroing stuff\n";
-      for(i=0;i<id_lev_lengths(1);i++) {
+      for(i=0;i<num_pops;i++) {
         Fixed0s(i) = 0L;
         Fixed1s(i) = 0L;
         for(r=0;r<BootReps;r++) {
@@ -229,15 +222,14 @@ List srs_identity(CharacterVector file,
       }
       //Rcpp::Rcout << "Done Zeroing stuff\n";
       // Now, cycle over the individuals, and add things up according to which population each is in
-      lev_vec = as<IntegerVector>(groups[0]); // this gives us the idx of the population of each indvidual
       for(i=0;i<N;i++) {
-        Fixed0s(lev_vec(i)) += (hetFlags(i) == 0) && allele_mat(0, i) == 0;
-        Fixed1s(lev_vec(i)) += (hetFlags(i) == 0) && allele_mat(0, i) == 1;
+        Fixed0s(pops_of_indivs(i)) += (hetFlags(i) == 0) && allele_mat(0, i) == 0;
+        Fixed1s(pops_of_indivs(i)) += (hetFlags(i) == 0) && allele_mat(0, i) == 1;
       }
       for(i=0;i<numHets;i++) {
         for(r=0;r<BootReps;r++) {
-        Rando0s(r, lev_vec(hetIdxs(i))) += allele_mat(r, hetIdxs(i)) == 0;
-        Rando1s(r, lev_vec(hetIdxs(i))) += allele_mat(r, hetIdxs(i)) == 1;
+          Rando0s(r, pops_of_indivs(hetIdxs(i))) += allele_mat(r, hetIdxs(i)) == 0;
+          Rando1s(r, pops_of_indivs(hetIdxs(i))) += allele_mat(r, hetIdxs(i)) == 1;
         }
       }
 
@@ -245,66 +237,112 @@ List srs_identity(CharacterVector file,
       // we can now use Fixed0s, Fixed1s, and Rando0s and Rando1s to get the quantities
       // we need at each level and for each resample/bootstrap replicate.
 
+      // determine how many times this locus is used in the poisson bootstrap samples
+      bootn = rpois(BootReps, 1);
+      bootn[0] = 1L;  // this is important.  The first row of zsums will be the actual estimate, and the remaining ones will be the bootstrap samples.
 
-
-      for(j=0;j<num_id_levs;j++) {
-        for(i=0;i<id_lev_lengths(j);i++) {
-            bin_counts[j](i, 0) = 0L;
-            bin_counts[j](i, 1) = 0L;
+      // Here we cycle over all the pops and get the Y0 and Y1 matrices filled
+      // for 0 up to num_pops - 1. And, while we are it, we will fill in the zsum values
+      // for those populations
+      for(r=0;r<BootReps;r++) {
+        Ytot0(r) = 0L;
+        Ytot1(r) = 0L;
+        for(i=0;i<num_pops;i++) {  // cycle over pops once to fill the Y0 and Y1 matrices
+          Y0(r, i) = Fixed0s(i) + Rando0s(r, i);
+          Y1(r, i) = Fixed1s(i) + Rando1s(r, i);
+          Ytot0(r) += Y0(r, i);
+          Ytot1(r) += Y1(r, i);
         }
-      }
 
-      Rcpp::Rcout << "alleles: " << alleles << "\n";
+         // now, cycle over the pops again to compute zsums, etc.
+        for(i=0;i<num_pops;i++) {
+          // Now, only do something with polymorphic loci
+          if( !(Ytot0(r) == 0 || Ytot1(r) == 0) ) {
+            // we only actually add stuff to the sum when there are at least 2 gene copies that have been sampled
+            // from each population.  We should come back and keep track of how many loci actually got used in there,
+            // and also keep track of the averge sample size (number of individuals with reads) across all the internal
+            // nodes.  Note that Y0(r, i) + Y1(r, i) should be constant over all r, so I could probably speed up this if() (though not really worth it, I expect)
+            if((Y0(r, i) + Y1(r, i)) >= 2) {
+              zbar =  (  Y0(r, i) * (Y0(r, i) - 1.0) +  Y1(r, i) * (Y1(r, i) - 1.0) ) /
+                ( (Y0(r, i) + Y1(r, i) ) * (Y0(r, i) + Y1(r, i) - 1.0) );  // this is what gets added to the sum for this rep
 
-      Rcpp::Rcout << "Filling stuff\n";
-      // Then put the values in there
-      for(j=0;j<num_id_levs - 1;j++) { // j cycles over the levels in the hierarchy
-        for(i=0;i<id_lev_lengths(j);i++) {  // i cycles over the elements in that hierarchy
-          if(j==0) {
-            if(alleles[i] != -1) {
-              bin_counts[j](i, alleles[i]) = 1L;
-              lev_vec = as<IntegerVector>(groups[j]);
-              bin_counts[j+1](lev_vec(i), alleles[i])++;
+              zsum(r, i) += bootn(r) * zbar;
+              zL(r, i) += bootn(r);
             }
-          } else {
-            lev_vec = as<IntegerVector>(groups[j]);
-            bin_counts[j+1](lev_vec(i), 0) += bin_counts[j](i, 0);
-            bin_counts[j+1](lev_vec(i), 1) += bin_counts[j](i, 1);
           }
         }
       }
+
+      // NOW DEAL WITH THE REMAINING INTERNAL NODES
+      // cycle over the bootstrap samples in the outer loop so that we can drop whole
+      // loci at this level.
+      for(r=0;r<BootReps;r++) {
+
+        // And now we can cycle over the remaining internal nodes and compute Y0s and Y1s
+        // for them, and add them to the zbars.
+        if( !(Ytot0(r) == 0 || Ytot1(r) == 0) ) {
+          for(j=0;j<num_internal_nodes - num_pops;j++) {
+            i = j + num_pops;  // this is the index of the internal node
+            daught = as<IntegerVector>(daughters(j));
+            ndaught = daught.size();
+            //Rcpp::Rcout << ndaught << ":" << daught << "\n";
+
+
+
+
+            // first, go ahead and compute Y0 and Y1 for these internal nodes, as these
+            // will get used for the parent of this node
+            Y0(r, i) = 0;  // initialize to accumulate a sum
+            Y1(r, i) = 0;
+            for(k=0;k<ndaught;k++) {
+              Y0(r, i) += Y0(r, daught[k]);
+              Y1(r, i) += Y1(r, daught[k]);
+            }
+
+            // now compute the zbar and add it to the zsum
+            zbar = 0.0;
+            npairs = 0; // we will explicitly count them up, since some pairs might not have any data
+            for(k1=0;k1<ndaught-1;k1++) {
+              for(k2=k1+1;k2<ndaught;k2++) {
+                d = daught[k1];
+                dp = daught[k2];
+                denom = ( (Y0(r, d) + Y1(r, d)) * (Y0(r, dp) + Y1(r, dp)) );
+                if(denom > 0.0001) { // greater than 0, but these are ints coded as doubles, so give it a little buffer
+                  zbar += (Y0(r, d) * Y0(r, dp) + Y1(r, d) * Y1(r, dp)) / denom;
+                  npairs++;
+                }
+              }
+            }
+            // and then add that to zsum after dividing by the number of pairs and multiplying it by bootn
+            if(npairs > 0.0001) {
+              zsum(r, i) += bootn(r) * zbar / npairs;
+              zL(r, i) += bootn(r);
+            }
+          }
+        }
+      }
+
+
       //return(List::create(bin_counts[0], bin_counts[1], bin_counts[2], bin_counts[3]));
 
      /////////////////// END OF ACTUAL CALCULATIONS FOR EACH LOCUS ///////////////////////////
-    } // close if marker is polymorphic and not all missing
 
-    return(List::create(allele_mat, numHets, hetIdxs, Fixed0s, Fixed1s, Rando0s, Rando1s));
+    //return(List::create(allele_mat, numHets, hetIdxs, Fixed0s, Fixed1s, Rando0s, Rando1s, Y0, Y1, zsum, bootn, zL));
   } // close loop over markers (rows in file)
 
 
+  // Now normalize the zsums and return all the stuff that we want to:
+  for(i=0;i<BootReps;i++) {
+    for(j=0;j<num_internal_nodes;j++) {
+      zsum(i, j) /= zL(i, j);
+    }
+  }
+
+  //return(List::create(zsum, bootn, zL));
   // store to return
-
-  NumericVector retNums(6);
-  retNums[0] = L + 1;
-  retNums[1] = NumLociPolymorph;
-  retNums[2] = NumLociMonomorphic;
-  retNums[3] = NumLociAllMissing;
-  retNums[4] = NumLociTooLowFreq;
-  retNums[5] = NumLociSuitableMAF;
-  retNums.names() = CharacterVector::create("all_sites",
-                "polyorphic_sites",
-                "monomorphic_sites",
-                "sites_missing_reads_from_everyone",
-                "polymorphic_sites_skipped_for_low_MAF",
-                "num_polymorph_sites_passing_MAF");
-
   List ret;
-  ret["IBS"] = retIBS;
-  ret["Cov"] = retCov;
-  ret["M"] = retM;
-  ret["sample_names"] = sample_names;
-  ret["freq_thresh"] = freq_thresh;
-  ret["site_counts"] = retNums;
+  ret["zbar"] = zsum;
+  ret["zL"] = zL;
 
   return(ret);
 }

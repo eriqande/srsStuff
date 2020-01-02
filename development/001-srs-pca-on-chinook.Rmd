@@ -1,0 +1,569 @@
+---
+title: "Single Read Sampling PCA on the Chinook the VCF"
+output: 
+  html_notebook:
+    toc: true
+---
+
+I've written a workflow with a combination of bcftools and R/Rcpp to do 
+this quite efficiently.
+
+## Filtering and catenating the VCFs
+
+First, I will filter the 34 chromosome VCFs down to biallelics with MAF > 0.05,
+on Hoffman.
+```sh
+# /u/home/e/eriq/nobackup-kruegg/chinook-wgs/vcf
+module load bcftools
+mkdir -p ../intermediates/322
+
+# filter all the vcfs down to new ones for each chromosome
+for i in NC_037*.vcf.gz; do echo $i; bcftools view -m 2 -M 2 --min-af 0.05 --max-af 0.95 -i 'F_MISSING < 0.5' $i -o ../intermediates/322/filtered_$i -Oz; done
+
+# note that NC_037105.1.vcf.gz had some issues.  It dumped core.  I think it has some
+# gremlins from the data transfer a long time ago when we got these off the cluster at
+# UCSD.  I used tr to zap non-ascii garbage, then I sorted it with bcftools.  Then I
+# ran that through.  There might be a couple of Mb missing from the end of the chromosome,
+# but that will make no difference to things now.
+
+# catenate all those into a single vcf (which is 2.1 Gb zipped)
+bcftools concat -o all-chroms-filtered.vcf.gz -Oz filtered_NC_037*.vcf.gz
+bcftools index all-chroms-filtered.vcf.gz 
+
+# Show a few stats from this:
+# SN	[2]id	[3]key	[4]value
+SN	0	number of samples:	160
+SN	0	number of records:	6457876
+SN	0	number of no-ALTs:	0
+SN	0	number of SNPs:	5261200
+SN	0	number of MNPs:	0
+SN	0	number of indels:	1196676
+SN	0	number of others:	0
+SN	0	number of multiallelic sites:	0
+SN	0	number of multiallelic SNP sites:	0
+```
+
+OK! 5.26 million SNPs and 1.19 million indels, for a grand
+total of 6.45 million variants.  This will put my new code to
+the test, for sure!
+
+Note to self: I could easily change my function to take a vector of file
+names, and then operate over vcf files, one for each chromosome, if I 
+didn't want to hassle with this.  But, I think it is fine for now.
+
+Now, I just have to get that 2.1 Gb file to my laptop (the stuff with Rcpp 
+is fast enough that I can do all those coavariance matrix calculations on my
+laptop.)  I will put it in tmp.
+```sh
+scp $hoff:/u/nobackup/kruegg/eriq/chinook-wgs/intermediates/322/all-chroms-filtered.vcf.gz.csi /tmp
+scp $hoff:/u/nobackup/kruegg/eriq/chinook-wgs/intermediates/322/all-chroms-filtered.vcf.gz /tmp
+```
+
+## Get meta data squared away and define colors for plots
+
+Nothing super interesting going on here.  Just getting the names
+standardized and the populations ordered the way I will want it all to be.
+```{r}
+library(tidyverse)
+library(srsStuff)
+meta <- read_csv("data/wgs-chinoook-samples-cleaned.csv") %>%
+  mutate(pop = str_replace_all(Population, "Fall|Spring|Winter", "") %>% str_trim()) %>%
+  select(-Population) %>%
+  mutate(
+    Population = recode(
+      pop,
+      "Salmon River" =  "Salmon R.",
+      "Feather River Hatchery" =  "Feather R.H.",
+      "Trinity River Hatchery" =  "Trinity R.H",
+      "San Joaquin River" =  "San Joaquin R.",
+      "Coleman Hatchery Late" =  "Coleman H.",
+      "Sacramento River" =  "Sacramento R. Winter Run",
+      "Butte Creek" =  "Butte Ck."
+    ),
+    Ecotype = recode(
+      run_type,
+      "Fall" =  "Fall Run",
+      "Spring" =  "Spring Run",
+      "Late Fall" =  "Late Fall Run",
+      "Winter" =  "Winter Run",
+    )) %>%
+  mutate(  # make a factor to be able to order the populations a little better
+    Population_f = factor(
+      Population,
+      levels = c(
+        "Sacramento R. Winter Run",
+        "San Joaquin R.",
+        "Butte Ck.",
+        "Coleman H.",
+        "Feather R.H.",
+        "Salmon R.",
+        "Trinity R.H"
+      )))
+
+# and make sure that our colors or here
+pca_colors <- c(
+  `Salmon R.` =  "#bae4b3",
+  `Feather R.H.` =  "#fee5d9",
+  `Trinity R.H` =  "#238b45",
+  `San Joaquin R.` =  "#fb6a4a",
+  `Coleman H.` =  "#fcbba1",
+  `Sacramento R. Winter Run` =  "#a50f15",
+  `Butte Ck.` = "#fc9272"
+)
+# and set our shape values
+pca_shapes <- c(
+  `Fall Run` = 21,
+  `Spring Run` = 24,
+  `Late Fall Run` = 25,
+  `Winter Run` = 23
+)
+
+```
+
+## PCA with all the fish
+
+This is all on my laptop. First get the sample names and the allele depths.
+```sh
+# in: /tmp
+bcftools query -l all-chroms-filtered.vcf.gz > sample_names.txt 
+time bcftools query -f '%CHROM\t%POS[\t%AD]\n' all-chroms-filtered.vcf.gz > all-fish-alle-depths.txt
+
+real	5m19.101s
+user	5m9.175s
+sys	0m8.729s
+```
+The allele depths file is 3.3 Gb.
+
+Run my little function, and see how long it takes.
+```{r}
+snames <- read_lines("/tmp/sample_names.txt")
+system.time(
+  AllFish <- srs_covar("/tmp/all-fish-alle-depths.txt", 
+                                                     sample_names = snames)
+)
+```
+
+### A quick function to process the output
+
+I will adopt some old code for some of this.  We will keep the top 6 PCs
+and set it up so that we can plot each one against every other.
+```{r}
+prep_output <- function(A) {
+  
+  # first for each individual i, get the number of sites at which
+  # that individual had a read and also another individual, j, averaged
+  # over all j.  This tells us on average how many markers went into
+  # compute the covariance for each individual.
+  m <- A$M
+  diag(m) <- 0
+  ave_sites <- tibble(
+    vcf_name = A$sample_names,
+    ave_sites = rowMeans(m) * ncol(m) / (ncol(m) - 1)
+  )
+    
+  # do the whole eigendecomposition on the standard covariance matrix.
+  eig <- eigen(A$Cov)
+  colnames(eig$vectors) <- sprintf("PC-%02d", 1:ncol(eig$vectors))
+    
+  
+  pca_tib <- as_tibble(eig$vectors[,1:6]) %>%
+    mutate(vcf_name = A$sample_names) %>%
+    select(vcf_name, everything()) 
+  
+  pca_long <- pca_tib %>%
+    tidyr::gather(., key = "PC", "val", -vcf_name)
+
+  # then expand a grid of the possible comparisons (ordered)
+  pca_pairs <- expand.grid(vcf_name = pca_tib$vcf_name,
+                      PCx = sprintf("PC-%02d", 1:6),
+                      PCy = sprintf("PC-%02d", 1:6),
+                      stringsAsFactors = FALSE) %>%
+    tibble::as_tibble() %>%
+    dplyr::left_join(., pca_long, by = c("vcf_name", "PCx" = "PC")) %>%
+    dplyr::rename(val_x = val) %>%
+    dplyr::left_join(pca_long, by = c("vcf_name", "PCy" = "PC")) %>%
+    dplyr::rename(val_y = val)  %>% 
+    left_join(ave_sites, by = "vcf_name") %>% # and here, join on some meta data
+    left_join(meta, by = "vcf_name")
+  
+  
+  # and now we are going to the the same sort of thing, but on the covariance
+  # matrix computed by the corrlations estimated a la Weir and Goudet
+  WaG <- (A$IBS - A$Mt_S) / (1 - A$Mt_S)
+  eig <- eigen(WaG)
+  colnames(eig$vectors) <- sprintf("PC-%02d", 1:ncol(eig$vectors))
+    
+  
+  pca_tib <- as_tibble(eig$vectors[,1:6]) %>%
+    mutate(vcf_name = A$sample_names) %>%
+    select(vcf_name, everything()) 
+  
+  pca_long <- pca_tib %>%
+    tidyr::gather(., key = "PC", "val", -vcf_name)
+  
+  pcp <- expand.grid(vcf_name = pca_tib$vcf_name,
+                      PCx = sprintf("PC-%02d", 1:6),
+                      PCy = sprintf("PC-%02d", 1:6),
+                      stringsAsFactors = FALSE) %>%
+    tibble::as_tibble() %>%
+    dplyr::left_join(., pca_long, by = c("vcf_name", "PCx" = "PC")) %>%
+    dplyr::rename(WaG_x = val) %>%
+    dplyr::left_join(pca_long, by = c("vcf_name", "PCy" = "PC")) %>%
+    dplyr::rename(WaG_y = val)
+  
+  # then join those both and return them
+  left_join(pcp, pca_pairs,
+            by = c("vcf_name", "PCx", "PCy"))
+}
+```
+
+
+### Now make some PCA plots
+
+```{r}
+allf <- prep_output(AllFish)
+
+bp <- ggplot(allf, aes(x = val_x, y = val_y, fill = Population, shape = Ecotype)) + 
+  facet_grid(PCy ~ PCx) +
+  geom_point(size = 3, stroke = 0.15) +
+  scale_fill_manual(values = pca_colors) +
+  scale_shape_manual(values = pca_shapes) +
+  theme_bw() +
+  guides(fill = guide_legend(override.aes=list(shape=22, stroke = 0.1, size = 6)),
+         shape = guide_legend(override.aes=list(stroke = 0.35, size = 4))
+         )
+  
+dir.create("outputs/001", recursive = TRUE, showWarnings = FALSE)
+ggsave(bp, filename = "outputs/001/all_fish1.pdf", width = 20, height = 20)
+
+# but also make it with the Weir and Goudet calculation
+bp <- ggplot(allf, aes(x = WaG_x, y = WaG_y, fill = Population, shape = Ecotype)) + 
+  facet_grid(PCy ~ PCx) +
+  geom_point(size = 3, stroke = 0.15) +
+  scale_fill_manual(values = pca_colors) +
+  scale_shape_manual(values = pca_shapes) +
+  theme_bw() +
+  guides(fill = guide_legend(override.aes=list(shape=22, stroke = 0.1, size = 6)),
+         shape = guide_legend(override.aes=list(stroke = 0.35, size = 4))
+         )
+  
+dir.create("outputs/001", recursive = TRUE, showWarnings = FALSE)
+ggsave(bp, filename = "outputs/001/all_fish1-WaG.pdf", width = 20, height = 20)
+
+```
+
+It looks to me like PC-02 is picking up on the Salmon River carcass samples.  Let's
+see how those results look when fill is mapped to ave_sites:
+```{r}
+bp <- ggplot(allf, aes(x = val_x, y = val_y, shape = Ecotype)) + 
+  facet_grid(PCy ~ PCx) +
+  geom_point(aes(fill = log10(ave_sites)), size = 3, stroke = 0.15) +
+  scale_fill_viridis_c() +
+  scale_shape_manual(values = pca_shapes) +
+  theme_bw() +
+  guides(fill = guide_legend(override.aes=list(shape=22, stroke = 0.1, size = 6)),
+         shape = guide_legend(override.aes=list(stroke = 0.35, size = 4))
+         )
+  
+ggsave(bp, filename = "outputs/001/all_fish_fill_by_ave_sites.pdf", width = 20, height = 20)
+```
+
+So, there really seems to be no way of getting around those crappy-quality fish.
+Let's id the 14 with the lowest ave_sites, and put a number next to them.
+```{r}
+lousies <- allf %>%
+  distinct(vcf_name, ave_sites) %>%
+  arrange(ave_sites) %>%
+  slice(1:14) %>%
+  mutate(idx = 1:n()) %>%
+  left_join(allf)
+
+bpt <- bp +
+  geom_text(data = lousies, mapping = aes(label = idx), colour = "black", nudge_y = 0.04)
+
+ggsave(bpt, filename = "outputs/001/all_fish_fill_by_ave_sites-numbered.pdf", width = 20, height = 20)
+```
+
+From that, it would appear to me that what is going on is that the covariance calculated between
+individuals with low read depth rely on so many fewer sites, than the other comparison, that there
+is just a lot more variance in that covariance estimate, and for that reason alone, variation along
+that axis that they define becomes
+a dominant principal component.  Let's look at the distribution of the actual elements in the covariance
+matrix, and compare those values to the number of sites that went into the calculation. 
+
+### Exploring relationship between estimated covariance and M
+
+Let's wrap this into a function as well.   We want a tibble with indiv-1, indiv-2, covariance, and M. 
+(Recall that M is the number of sites that went into calculating the covariance.)
+
+```{r}
+cov_and_M <- function(A) {
+  tibble(vcf_name_1 = rep(A$sample_names, times = nrow(A$Cov)),
+         vcf_name_2 = rep(A$sample_names, each = ncol(A$Cov)),
+         covar = as.vector(A$Cov),
+         M = as.vector(A$M),
+         WaG = as.vector((A$IBS - A$Mt_S) / (1 - A$Mt_S))
+      )
+}
+
+CM <- cov_and_M(AllFish)
+
+# save CM as an intermediate, in case we need to regenerate figures
+dir.create("intermediates/001", recursive = TRUE, showWarnings = FALSE)
+write_rds(CM, "intermediates/001/CM.rds", compress = "xz")
+
+CM %>%
+  filter(vcf_name_1 < vcf_name_2) %>%
+  arrange(desc(M)) %>%
+  ggplot(aes(x = covar, y = 2, colour = log10(M))) +
+  geom_jitter(width = 0, height = 1, alpha = 0.6) +
+  scale_colour_viridis_c()
+```
+
+Aha!  OK, let's break these into categories:
+```{r, fig.height=5}
+CM_cut <- CM %>%
+  filter(vcf_name_1 < vcf_name_2) %>%
+  arrange(desc(M)) %>%
+  mutate(m_group = cut(M, breaks = c(0, 1000, 2000, 5000, 10000, 1e5, 1e6, 1e7)))
+
+
+g <- ggplot(CM_cut, aes(x = covar, y = 2, colour = log10(M))) +
+  geom_jitter(width = 0, height = 1) +
+  scale_colour_viridis_c() +
+  facet_wrap(~m_group, ncol = 1)
+
+g
+
+# make a pdf of that too that one can zoom in on
+ggsave(g, filename = "outputs/001/all-fish-covar-and-M-facets-1.pdf", width = 18, height = 16)
+```
+
+But, what if we look at the Weir and Goudet measure on that?
+```{r}
+g <- ggplot(CM_cut, aes(x = WaG, y = 2, colour = log10(M))) +
+  geom_jitter(width = 0, height = 1) +
+  scale_colour_viridis_c() +
+  facet_wrap(~m_group, ncol = 1)
+
+g
+
+# make a pdf of that too that one can zoom in on
+ggsave(g, filename = "outputs/001/all-fish-covar-and-M-facets-WaG.pdf", width = 18, height = 16)
+```
+
+Clearly, there are a few bad apples in there.  Let's see who they are (though we really already know...)
+```{r}
+ba <- CM %>%
+  filter(vcf_name_1 < vcf_name_2) %>%
+  arrange(desc(M)) %>%
+  mutate(m_group = cut(M, breaks = c(0, 1000, 2000, 5000, 10000, 1e5, 1e6, 1e7))) %>%
+  group_by(m_group) %>%
+  summarise(fishies = list(unique(c(vcf_name_1, vcf_name_2))))
+ba
+```
+
+So, the fish that are involved in the pairs with fewer than 5000 SNPs are:
+```{r}
+the_worst <- allf %>%
+  distinct(vcf_name, ave_sites) %>%
+  arrange(ave_sites) %>%
+  mutate(ave_site_idx = 1:n()) %>%
+  filter(vcf_name %in% unique(unlist(ba$fishies[1:3])) )
+
+
+the_worst
+```
+
+OK! So, our decision a long time ago to drop the 14 individuals with the lowest read depths
+for further analyses makes a lot of sense. Although I suppose that for purposes like inferring haplotypes, that aren't just doing things pairwise, you can probably tolerate a little more missing data.   (i.e., PCA is going to be particularly susceptible to individuals )
+
+But, let's see what things look like if we toss the worst 10 (from our "numbered" PCAs, those are clearly
+the worst of the worst..)
+```{r}
+g <- CM %>%
+  filter(vcf_name_1 < vcf_name_2) %>%
+  arrange(desc(M)) %>%
+  filter(!(vcf_name_1 %in% the_worst$vcf_name[1:10]) & !(vcf_name_2 %in% the_worst$vcf_name[1:10]) ) %>%
+  mutate(m_group = cut(M, breaks = c(0, 1000, 2000, 5000, 10000, 1e5, 1e6, 1e7))) %>%
+  ggplot(aes(x = covar, y = 2, colour = log10(M))) +
+  geom_jitter(width = 0, height = 1) +
+  scale_colour_viridis_c() +
+  facet_wrap(~m_group, ncol = 1)
+
+g
+```
+
+Note that there seems to still be one crazy flier there with low read depth, so try tossing
+the first 11:
+```{r}
+g <- CM %>%
+  filter(vcf_name_1 < vcf_name_2) %>%
+  arrange(desc(M)) %>%
+  filter(!(vcf_name_1 %in% the_worst$vcf_name[1:11]) & !(vcf_name_2 %in% the_worst$vcf_name[1:11]) ) %>%
+  mutate(m_group = cut(M, breaks = c(0, 1000, 2000, 5000, 10000, 1e5, 1e6, 1e7))) %>%
+  ggplot(aes(x = covar, y = 2, colour = log10(M))) +
+  geom_jitter(width = 0, height = 1) +
+  scale_colour_viridis_c() +
+  facet_wrap(~m_group, ncol = 1)
+
+g
+```
+
+That looks pretty suitable.  So, let's drop those individuals from the analysis and re-do the PCA.
+We write them out so we can re-extract the allele counts without them.
+```{r}
+write_lines(the_worst$vcf_name[1:11], path = "outputs/001/the_worst_11.txt")
+```
+
+## Explore the distribution of the covariances
+
+I am going to make a horrific facet grid of histograms, filtering out
+the worst 11 individuals...
+```{r}
+CM_cut_drop11 <- CM %>%
+  arrange(desc(M)) %>%
+  filter(vcf_name_1 != vcf_name_2) %>%
+  filter(!(vcf_name_1 %in% the_worst$vcf_name[1:11]) & !(vcf_name_2 %in% the_worst$vcf_name[1:11]) ) %>%
+  mutate(m_group = cut(M, breaks = c(0, 1000, 2000, 5000, 10000, 1e5, 1e6, 1e7)))
+  
+pops <- meta %>%
+  select(vcf_name, Population_f)
+
+CM_with_pops <- CM_cut_drop11 %>%
+  left_join(pops, by = c("vcf_name_1" = "vcf_name")) %>%
+  rename(Population_f_1 = Population_f) %>%
+  left_join(pops, by = c("vcf_name_2" = "vcf_name")) %>%
+  rename(Population_f_2 = Population_f)
+
+g <- ggplot(CM_with_pops, aes(x = covar, fill = m_group)) +
+  geom_histogram(bins = 200, position = position_stack())
+
+g
+
+ggsave(g, filename = "outputs/001/covar-histograms-no-faceting.pdf", width = 8, height = 6)
+```
+
+Now, let's look at the same sort of plot, but with the WaG version:
+```{r}
+gWaG <- ggplot(CM_with_pops, aes(x = WaG, fill = m_group)) +
+  geom_histogram(bins = 200, position = position_stack())
+
+gWaG
+
+ggsave(gWaG, filename = "outputs/001/covar-histograms-no-faceting-WaG.pdf", width = 8, height = 6)
+```
+This does not seem to show as much structure...
+
+
+Now we are going to facet grid those dudes!
+```{r}
+g2 <- g +
+  facet_grid(Population_f_1 ~ Population_f_2)
+
+gWaG2 <- gWaG +
+  facet_grid(Population_f_1 ~ Population_f_2)
+
+ggsave(g2, filename = "outputs/001/covar-histograms-with-faceting.pdf", width = 14, height = 14)
+ggsave(gWaG2, filename = "outputs/001/covar-histograms-with-faceting-WaG.pdf", width = 14, height = 14)
+```
+
+What if we compare the standard to the WaG values?
+```{r}
+CM %>% 
+ggplot(aes(x = covar, y = WaG, colour = log10(M))) +
+  geom_point() +
+  scale_colour_viridis_c()
+```
+
+
+## PCA with everyone except the worst 11
+
+First, we drop those individuals.
+```sh
+# get the names of the remaining individuals and the allele depths.
+# we can do that in one fell swoop.
+time bcftools query -S ^outputs/001/the_worst_11.txt -f '%CHROM\t%POS[\t%AD]\n' /tmp/all-chroms-filtered.vcf.gz  > /tmp/allele-depths-dropping-11-again.txt
+
+real	5m6.323s
+user	4m57.719s
+sys	0m7.722s
+
+# and get a list of the names of the remaining fish
+(cat outputs/001/the_worst_11.txt; echo xxxxxxxxxxxxxx; cat /tmp/sample_names.txt) | awk '/xxxxxxxxx/ {go=1; next} go==0 {drop[$1]++} go==1 {if(!($1 in drop)) print}' > /tmp/sample_names_dropping_11.txt
+
+```
+
+Now, compute the covariance.
+```{r}
+system.time(
+  Drop11 <- srs_covar("/tmp/allele-depths-dropping-11-again.txt", 
+                                                     sample_names = read_lines("/tmp/sample_names_dropping_11.txt"))
+)
+```
+
+Now process and plot:
+```{r}
+d11 <- prep_output(Drop11)
+
+d11_plot <- ggplot(d11, aes(x = val_x, y = val_y, fill = Population, shape = Ecotype)) + 
+  facet_grid(PCy ~ PCx) +
+  geom_point(size = 3, stroke = 0.15) +
+  scale_fill_manual(values = pca_colors) +
+  scale_shape_manual(values = pca_shapes) +
+  theme_bw() +
+  guides(fill = guide_legend(override.aes=list(shape=22, stroke = 0.1, size = 6)),
+         shape = guide_legend(override.aes=list(stroke = 0.35, size = 4))
+         )
+  
+ggsave(d11_plot, filename = "outputs/001/drop11_fish_pca1.pdf", width = 20, height = 20)
+
+d11_plot_WaG <- ggplot(d11, aes(x = WaG_x, y = WaG_y, fill = Population, shape = Ecotype)) + 
+  facet_grid(PCy ~ PCx) +
+  geom_point(size = 3, stroke = 0.15) +
+  scale_fill_manual(values = pca_colors) +
+  scale_shape_manual(values = pca_shapes) +
+  theme_bw() +
+  guides(fill = guide_legend(override.aes=list(shape=22, stroke = 0.1, size = 6)),
+         shape = guide_legend(override.aes=list(stroke = 0.35, size = 4))
+         )
+  
+ggsave(d11_plot_WaG, filename = "outputs/001/drop11_fish_pca-WaG.pdf", width = 20, height = 20)
+```
+
+That is more what things should look like.  PC-1 separates Klamath from Sacto, PC-2 separates winter run from the rest, PC-3 
+separates Butte Creek from everything else.  PC-4 separates Trinity from Salmon, but it also looks it might have a long tail 
+due to poor sample quality.  We will color by M's here shortly.  PC-5 looks like it is starting to pull fall and spring apart
+in different basins.  I wonder if that is picking up on the GREB1L region.  We could try dropping a bit of that region next to see
+what happens then.
+
+```{r}
+d11_plot_M <- ggplot(d11, aes(x = val_x, y = val_y, fill = log10(ave_sites), shape = Ecotype)) + 
+  facet_grid(PCy ~ PCx) +
+  geom_point(size = 3, stroke = 0.15) +
+  scale_fill_viridis_c() +
+  scale_shape_manual(values = pca_shapes) +
+  theme_bw() +
+  guides(fill = guide_legend(override.aes=list(shape=22, stroke = 0.1, size = 6)),
+         shape = guide_legend(override.aes=list(stroke = 0.35, size = 4))
+         )
+  
+ggsave(d11_plot_M, filename = "outputs/001/drop11_fish_pca2-fill-by-ave-sites.pdf", width = 20, height = 20)
+```
+
+Yep, PC-04 is still picking up some garbage from small number of sites with reads between some salmon
+river pairs.
+
+
+## What about with no filtering on MAF?
+
+In Weir and Goudet, this ended up giving much better results for 
+pairwise individuals when using their method and a ratio of averages.
+What about for us?
+```sh
+# on hoffman with VCFs
+mkdir -p ../intermediates/322/noMAF
+for i in NC_037*.vcf.gz; do echo $i; bcftools view -m 2 -M 2  -i 'F_MISSING < 0.5' $i -o ../intermediates/322/noMAF/filtered_$i -Oz; done
+```
+
+I didn't get through this...

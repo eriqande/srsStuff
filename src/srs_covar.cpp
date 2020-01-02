@@ -79,18 +79,22 @@ List srs_covar(CharacterVector file,
   int NumLociPolymorph = 0;  // how many markers were not missing at everyone and were polymorphic after sampling
   int NumLociSuitableMAF = 0; // how many polymorphic markers had high enough MAF?
   int NumLociTooLowFreq = 0; // How many polymorphic sites were skipped cuz of low MAF?
-  double fa;  // for alt allele freq
+  double fa, r, a;  // for alt allele freq, and the number of ref and alt alleles
 
   // Here, declare matrices to send some information back
   NumericMatrix retCov(sample_names.size(), sample_names.size());
   NumericMatrix retIBS(sample_names.size(), sample_names.size());
   NumericMatrix retM(sample_names.size(), sample_names.size());  // number non-missing + polymorphic loci
+  NumericMatrix retMt_S(sample_names.size(), sample_names.size()); // to store the mean proportion of pairs
+  // drawn from separate individuals that are IBS.  For the Weir and Goudet calculation
+
   // initialize those to 0.0s.  Rcpp11 has a nicer constructor, but not here, apparently.
   for(i=0;i<sample_names.size();i++) {
     for(j=0;j<sample_names.size();j++) {
       retCov(i,j) = 0.0;
       retIBS(i,j) = 0.0;
       retM(i,j) = 0.0;
+      retMt_S(i,j) = 0.0;
     }
   }
 
@@ -163,6 +167,8 @@ List srs_covar(CharacterVector file,
 
       // compute the alt allele frequency from the sampled reads
       fa = (double)totAlt / totNotMissing;
+      a = (double)totAlt;
+      r = (double)(totNotMissing - totAlt);
 
       if(fa > freq_thresh && fa < 1 - freq_thresh) {  // here, impose a MAF cutoff if desired
         NumLociSuitableMAF++;
@@ -172,6 +178,7 @@ List srs_covar(CharacterVector file,
               retCov(i, j) += (alleles[i] - fa) * (alleles[j] - fa) / (fa * (1.0 - fa));
               retIBS(i, j) += (alleles[i] == alleles[j]);
               retM(i,j) += 1.0;
+              retMt_S(i,j) += (r * (r - 1) + a * (a - 1)) / (totNotMissing * (totNotMissing - 1));
             }
           }
         }
@@ -187,11 +194,13 @@ List srs_covar(CharacterVector file,
     for(j=0;j<=i;j++) {
       retCov(i, j) = retCov(i, j) / retM(i,j);
       retIBS(i, j) = retIBS(i, j) / retM(i,j);
+      retMt_S(i,j) = retMt_S(i,j) / retM(i,j);
 
       if(i != j) {
         retCov(j, i) = retCov(i, j);
         retIBS(j, i) = retIBS(i, j);
         retM(j, i) = retM(i, j);
+        retMt_S(j, i) = retMt_S(i,j);
       }
     }
   }
@@ -215,6 +224,7 @@ List srs_covar(CharacterVector file,
   ret["IBS"] = retIBS;
   ret["Cov"] = retCov;
   ret["M"] = retM;
+  ret["Mt_S"] = retMt_S;
   ret["sample_names"] = sample_names;
   ret["freq_thresh"] = freq_thresh;
   ret["site_counts"] = retNums;

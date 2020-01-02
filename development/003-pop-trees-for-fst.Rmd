@@ -1,0 +1,256 @@
+---
+title: "Population Trees for Fst Estimation"
+output: 
+  html_notebook:
+    toc: true
+---
+
+The purpose here is to take the Chinook data and designate a
+hierarchical tree structure for it (in a tibble), and then develop
+a function to plot that, and then think about how to code up
+the nodes of that tree in a structure that can be used to compute
+Fst (i.e. $\theta$) along the various edges of the trees (not worrying
+about correlation between individuals---we are going to subsume all that
+into the increased correlation along the edge leading to that population
+for now.)
+
+This supersedes (and is a more general version of what I was attempting)
+in 002.
+
+## Define the structure in a tibble
+
+We just pull our salmon metadata up and we reorganize it and rename
+the populations and things to be short enough to fit onto a `dot` DAG.
+
+Note that this is something of study in how poor the relational model
+seems to be for storing tree-like data...
+```{r}
+library(tidyverse)
+library(srsStuff)
+meta <- read_csv("data/wgs-chinoook-samples-cleaned.csv") %>%
+  mutate(
+    group1 = recode(
+      Population,
+      "Salmon River Fall" =  "SalmR-Fall",
+      "Salmon River Spring" =  "SalmR-Spri",
+      "Feather River Hatchery Fall" =  "FeatH-Fall",
+      "Feather River Hatchery Spring" =  "FeatH-Spri",
+      "Trinity River Hatchery Fall" =  "TrinH-Fall",
+      "Trinity River Hatchery Spring" =  "TrinH-Spri",
+      "San Joaquin River Fall" =  "SanJo-Fall",
+      "Coleman Hatchery Late Fall" =  "ColmH-LFal",
+      "Sacramento River Winter" =  "SacrR-Wint",
+      "Butte Creek Spring" =  "ButtC-Spri"
+    )) %>%
+  rename(indiv = vcf_name) %>%
+  select(indiv, group1)
+
+# now we just need to make the other levels of the hierarchy
+tree_tib <- meta %>%
+  mutate(group2 = case_when(
+    group1 %in% c("SalmR-Fall", "SalmR-Spri") ~ "SalmonR",
+    group1 %in% c("TrinH-Fall", "TrinH-Spri") ~ "TrinityH",
+    group1 %in% c("FeatH-Fall", "FeatH-Spri") ~ "FeatherH",
+    TRUE ~ group1
+  )) %>%
+  mutate(group3 = case_when(
+    group2 %in% c("SalmonR", "TrinityH") ~ "Klamath",
+    group2 %in% c("FeatherH", "ColmH-LFal", "SanJo-Fall") ~ "Sacto_F_LF",
+    TRUE ~ group2
+  )) %>%
+  mutate(group4 = case_when(
+    group3 %in% c("Sacto_F_LF", "ButtC-Spri", "SacrR-Wint") ~ "Sacramento",
+    TRUE ~ group3
+  )) %>%
+  mutate(group5 = case_when(
+    group4 %in% c("Sacramento", "Klamath") ~ "Root",
+    TRUE ~ group4
+  )) 
+
+```
+
+And now we are going to sort those and then turn them all into factors so
+that we have a nice integer representation of the different nodes in the tree.
+
+```{r}
+tt_sorted <- tree_tib %>%
+  arrange(group5, group4, group3, group2, group1, indiv)
+
+levs <- unique(as.vector(as.matrix(tt_sorted)))
+
+tt_factored <- tt_sorted %>%
+  transmute_all(function(x) factor(x, levels = levs))
+```
+
+## Making a dot tree of it
+
+The above gives us what we need to make a tree to visualize this arrangement.
+We include a function `tib2dot()` in the 'srsStuff' package to write it out
+as a tree for dot to plot.
+
+Here it is (albeit sideways) for the case where two gene copies are sampled from
+every individual.
+```{r}
+dir.create("dot_stuff", showWarnings = FALSE)
+tib2dot(tib = tt_factored, int_fontsize = 95, num_gene_copies = 2, outfile = "dot_stuff/two-genes.dot")
+system("cd dot_stuff; dot -Tsvg two-genes.dot > two-genes.svg")
+knitr::include_graphics("dot_stuff/two-genes.svg")
+```
+
+And here we have it when only a single gene copy is sampled from
+each individual.
+```{r}
+dir.create("dot_stuff", showWarnings = FALSE)
+tib2dot(tib = tt_factored, int_fontsize = 95, num_gene_copies = 1, outfile = "dot_stuff/one-gene.dot")
+system("cd dot_stuff; dot -Tsvg one-gene.dot > one-gene.svg")
+knitr::include_graphics("dot_stuff/one-gene.svg")
+```
+
+OK, that is cool.  Now we can see it quite clearly.  
+
+## Preparing input for srs_identity() and trying it out
+
+The final piece of the puzzle for computing these thigns will be to package up a
+list of the daughers of each internal node so that we can efficiently count up
+the number of alleles under each successive, internal node, and do the 
+calculations we wish to for them.  
+
+Here and now I will see if I can incorporate that directly into the code
+I have already put in place in srs_identity.cpp.  
+
+OK, back now after having though it through.  We want to give every
+internal node an index between 0 and I-1 where I is the number
+of internal nodes, and we want to keep track of which nodes are
+"populations."  And we also need to keep track of the order of individuals
+in the VCF file (which we should have) so that we can point each
+population to its proper daughters by position in the file.
+```sh
+mkdir intermediates/003; bcftools query -l ~/Documents/UnsyncedData/chinook-Big-VCF-for-srs-stuff/all-chroms-filtered.vcf.gz > intermediates/003/sample_names.txt
+```
+Now, from that we make a vector that says where all these individuals belong, and gather together the
+other information that we need to pass to srs_identity().
+```{r}
+vcf_order <- tibble(indiv = read_lines("intermediates/003/sample_names.txt"))
+subtracto <- min(as.integer(tt_factored$group1))
+
+# this will go into the srs_identity() function
+pops_of_indivs <- tt_factored %>%
+  select(indiv, group1) %>%
+  mutate(indiv = as.character(indiv)) %>%
+  left_join(vcf_order, .) %>%
+  mutate(pop_idx = as.integer(group1) - subtracto) %>%
+  pull(pop_idx)
+
+# this will, too
+num_pops <- length(unique(pops_of_indivs))
+
+# and now we need the number of internal nodes
+internal_nodes <- setdiff(levels(tt_factored$indiv), as.character(tt_factored$indiv))
+num_internal_nodes <- length(internal_nodes)
+
+# finally, we make the list "daughters", which are the 0-based indexes 
+# (0 being the first of the internal nodes) of the daughters of all
+# the non-population internal nodes
+glommed <- lapply(3:ncol(tt_factored), function(i) {ret <- tt_factored[, c(i, i - 1)]; names(ret) <- c("parent", "daughter"); ret}) %>%
+  bind_rows() %>%
+  filter(daughter != parent)
+
+idxs_tibble <- glommed %>%
+  group_by(parent) %>%
+  summarise(
+    indices = list(unique(as.integer(daughter)) - subtracto),
+    names = list(unique(as.character(daughter)))
+  ) %>%
+  mutate(parent_idx = as.integer(parent))
+
+daughters <- idxs_tibble$indices
+names(daughters) <- as.character(idxs_tibble$parent)
+
+# hey! Note that for computing the Fst values, we are going to want to have a daugher-centric
+# listing of all the internal nodes. So, let's do that.  HEY! THIS SHOULD BE BASE-1 indexed.
+fst_edges_tib <- glommed %>%
+  group_by(parent, daughter) %>%
+  tally() %>%
+  ungroup() %>%
+  select(-n) %>%
+  mutate(parent_idx = as.integer(parent) - subtracto + 1,
+         daughter_idx = as.integer(daughter) - subtracto + 1
+         )
+
+# that will let us compute Fst values for all of those...Oh boy! A job for list columns!
+  
+```
+
+
+Now, we can use those to try calling srs_identity().
+```{r}
+system.time(test <- srs_identity("/Users/eriq/Documents/UnsyncedData/chinook-Big-VCF-for-srs-stuff/all-fish-alle-depths-1M.txt", 
+             pops_of_indivs = pops_of_indivs, 
+             num_pops = num_pops, 
+             num_internal_nodes = num_internal_nodes, 
+             daughters = daughters,
+             sample_names = vcf_order$indiv,  # this will be dropped soon.
+             BootReps = 10L))
+```
+
+
+
+
+## Run it on the whole schmeer.  Do 100 Bootstrap Reps
+
+This should take about an hour...
+```{r}
+system.time(zbars_6.7M_snps_100BS <- srs_identity("/Users/eriq/Documents/UnsyncedData/chinook-Big-VCF-for-srs-stuff/all-fish-alle-depths.txt", 
+             pops_of_indivs = pops_of_indivs, 
+             num_pops = num_pops, 
+             num_internal_nodes = num_internal_nodes, 
+             daughters = daughters,
+             sample_names = vcf_order$indiv,  # this will be dropped soon.
+             BootReps = 101))
+```
+
+The above takes about 22 minutes.  I am going to save the result right now so that
+we won't have to regenerate it.
+```{r}
+dir.create("outputs/003")
+write_rds(zbars_6.7M_snps_100BS, path = "outputs/003/zbars_6.7M_snps_100BS.rds")
+```
+
+
+Once we have that output, we can make a tibble with a list column
+that has all of the Fst estimates and bootstrap reps:
+```{r}
+#' @param SI the list that gets output by srs_identity.
+#' @param FET the fst_edges_tibble.  A tibble with columns parent daughter parent_idx and daughter_idx.
+#' each daughter appears once.  The idxs must be the indexes of the columns in the
+#' zbar output of SI that correspond to each parent or daughter node.
+fst_ize_zbars <- function(SI, FET) {
+  FET %>%
+    mutate(fst_boot_reps = map2(.x = parent_idx,
+                           .y = daughter_idx,
+                           .f = ~ (SI$zbar[, .y] - SI$zbar[, .x]) / (1 - SI$zbar[, .x]))
+    ) %>%
+    mutate(fst_est = map_dbl(fst_boot_reps, ~ .x[1]),
+           min_boot = map_dbl(fst_boot_reps, ~ min(.x)),
+           max_boot = map_dbl(fst_boot_reps, ~ max(.x)))
+}
+
+
+Fst_ests <- fst_ize_zbars(zbars_6.7M_snps_100BS, fst_edges_tib)
+```
+
+## Now, map those Fst's as edge labels on the tree!
+
+I've added a new argument to `tib2dot()` called `edge_extras`.  Here we make a tibble like it should be:
+```{r}
+edge_extras <- Fst_ests %>%
+  mutate(text = sprintf(",headlabel=\"%.4f (%.4f, %.4f)\",fontsize=60,labeldistance=1.0,fontcolor=blue", fst_est, min_boot, max_boot)) %>%
+  select(parent, daughter, text)
+```
+
+Now, give it a go:
+```{r}
+tib2dot(tib = tt_factored, int_fontsize = 95, num_gene_copies = 1, outfile = "dot_stuff/one-gene-with-fsts.dot", edge_extras = edge_extras)
+system("cd dot_stuff; dot -Tsvg one-gene-with-fsts.dot > one-gene-with-fsts.svg")
+knitr::include_graphics("dot_stuff/one-gene-with-fsts.svg")
+```

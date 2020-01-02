@@ -1,0 +1,66 @@
+---
+title: "Developing srs_identity()"
+output: html_notebook
+---
+
+
+I will use the chinook as an example while I develop this.
+
+
+## Specifying the hierarchical groupings
+
+I will have four levels of groupings as indicated in my notebook
+for Nov 4, 2019.
+
+Here is how we will do them:
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+
+meta <- read_csv("data/wgs-chinoook-samples-cleaned.csv") %>%
+  select(vcf_name, Population)
+
+pop_nums <- count(meta, Population) %>%
+  mutate(pop_idx = (1:n()) - 1) %>%
+  select(-n) %>%
+  mutate(trib_idx = c(0, 1, 2, 2, 3, 4, 4, 5, 6, 6))
+
+ind_vec <- meta %>%
+  left_join(pop_nums) %>%
+  pull(pop_idx) %>%
+  set_names(meta$vcf_name)
+
+# now, we squash the ecotypes down into tributaries
+trib_vec <- pop_nums$trib_idx %>%
+  set_names(pop_nums$Population)
+
+# now we make a basin vec
+basin_vec <- c(
+  butte_creek = 0,
+  late_fall = 0,
+  feather_river = 0,
+  winter_run = 0,
+  salmon_river = 1, 
+  san_joaquin = 0,
+  trinity_river = 1
+)
+  
+# and finally a globalvec
+glob_vec <- c(sacto = 0, klamath = 0)
+```
+
+So, we can store that as a list
+```{r}
+level_idxs <- list(
+  ecotypes_in_tribs = ind_vec,
+  tribs_in_basins = trib_vec,
+  basins_in_global = basin_vec,
+  global = glob_vec
+)
+```
+
+
+Now, we can play around with passing that information
+into the function and parsing it out.
+```{r}
+srs_identity(file = "/tmp/with_matt/allele_depths.txt", groups = level_idxs,sample_names = meta$vcf_name, BootReps = 10)
+```
