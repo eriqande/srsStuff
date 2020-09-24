@@ -58,10 +58,8 @@ using namespace Rcpp;
 //' @param num_internal_nodes the number of internal nodes in the tree (this includes the populations)
 //' @param daughters a list of vectors.  Each one is the 0-based indexes of the daughters
 //' of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).
-//' @param sample_names A character vector of the names of the sample, in the
-//' order they appear in the VCF file.
 //' @return This passes back a list of information about the various allele
-//' sharing statistics (and, eventually bootstrap information) that can be
+//' sharing statistics (and bootstrap information) that can be
 //' used by a higher-level function to compute the F-statistics, etc.
 //'
 //'
@@ -72,7 +70,6 @@ List srs_identity(CharacterVector file,
                   int num_pops,
                   int num_internal_nodes,
                   List daughters,
-                  CharacterVector sample_names,
                   int BootReps) {
   int comma, i, j, r, k, d, dp, k1, k2;
   std::string tempstr;

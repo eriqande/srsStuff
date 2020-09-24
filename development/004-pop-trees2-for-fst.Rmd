@@ -1,0 +1,88 @@
+---
+title: "Trying for a different tree specification"
+output: html_notebook
+---
+
+Trying to specify a tree in a better way than using the tibble
+like I did in 003.
+```{r, message=FALSE}
+library(tidyverse)
+library(srsStuff)
+```
+
+Let's first load in all the individuals and their population designations:
+```{r, message=FALSE}
+meta <- read_csv("data/wgs-chinoook-samples-cleaned.csv") %>%
+  mutate(
+    group1 = recode(
+      Population,
+      "Salmon River Fall" =  "SalmR-Fall",
+      "Salmon River Spring" =  "SalmR-Spri",
+      "Feather River Hatchery Fall" =  "FeatH-Fall",
+      "Feather River Hatchery Spring" =  "FeatH-Spri",
+      "Trinity River Hatchery Fall" =  "TrinH-Fall",
+      "Trinity River Hatchery Spring" =  "TrinH-Spri",
+      "San Joaquin River Fall" =  "SanJo-Fall",
+      "Coleman Hatchery Late Fall" =  "ColmH-LFal",
+      "Sacramento River Winter" =  "SacrR-Wint",
+      "Butte Creek Spring" =  "ButtC-Spri"
+    )) %>%
+  rename(indiv = vcf_name) %>%
+  select(indiv, group1)
+```
+Now, we can make our tree_list:
+```{r}
+# get the populations in there
+treelist <- split(x = meta$indiv, f = meta$group1)
+
+# now, all the internal nodes
+treelist$SalmonR <- c("SalmR-Fall", "SalmR-Spri")
+treelist$TrinityH <- c("TrinH-Fall", "TrinH-Spri")
+treelist$FeatherH <- c("FeatH-Fall", "FeatH-Spri")
+treelist$Klamath <- c("SalmonR", "TrinityH")
+treelist$Sacto_F_LF <- c("FeatherH", "ColmH-LFal", "SanJo-Fall")
+treelist$Sacramento <- c("Sacto_F_LF", "ButtC-Spri", "SacrR-Wint")
+treelist$Root <- c("Sacramento", "Klamath")
+
+```
+
+Check that treelist and looks at the plots of it to confirm it is correct:
+```{r}
+set.seed(1234)
+check_tree <- prepare_treelist(treelist)
+```
+
+Here is the plot with no internal node names:
+```{r}
+check_tree$plots$tree_without_names
+```
+
+Here it is with the internal node names on there:
+```{r}
+check_tree$plots$tree_with_names
+```
+
+If you prefer to stare at a classical rooted-looking dendrogram, you can access
+them like so:
+```{r}
+check_tree$plots$dendrogram_without_names
+```
+Or include the names too:
+```{r, fig.width=6}
+check_tree$plots$dendrogram_with_names
+```
+
+Now, let us also get the individual sample names in the order that they appear
+in the VCF file.
+```{r}
+vcf_names <- read_lines("intermediates/003/sample_names.txt")
+```
+
+And then we run prepare treelist again, producing all the necessary input
+for `srs_identity()`.
+```{r}
+prepped_tree <- prepare_treelist(
+  treelist,
+  vcf_names = vcf_names
+)
+```

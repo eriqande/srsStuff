@@ -113,15 +113,13 @@ srs_covar <- function(file, sample_names, freq_thresh = 0.0) {
 #' @param num_internal_nodes the number of internal nodes in the tree (this includes the populations)
 #' @param daughters a list of vectors.  Each one is the 0-based indexes of the daughters
 #' of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).
-#' @param sample_names A character vector of the names of the sample, in the
-#' order they appear in the VCF file.
 #' @return This passes back a list of information about the various allele
-#' sharing statistics (and, eventually bootstrap information) that can be
+#' sharing statistics (and bootstrap information) that can be
 #' used by a higher-level function to compute the F-statistics, etc.
 #'
 #'
 #' @export
-srs_identity <- function(file, pops_of_indivs, num_pops, num_internal_nodes, daughters, sample_names, BootReps) {
-    .Call(`_srsStuff_srs_identity`, file, pops_of_indivs, num_pops, num_internal_nodes, daughters, sample_names, BootReps)
+srs_identity <- function(file, pops_of_indivs, num_pops, num_internal_nodes, daughters, BootReps) {
+    .Call(`_srsStuff_srs_identity`, file, pops_of_indivs, num_pops, num_internal_nodes, daughters, BootReps)
 }
 

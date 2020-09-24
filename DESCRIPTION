@@ -9,6 +9,12 @@ Description: More about what it does (maybe more than one line)
 License: What license is it under?
 Encoding: UTF-8
 LazyData: true
-Imports: Rcpp (>= 1.0.2)
+Imports: 
+  dplyr,
+  ggraph,
+  Rcpp (>= 1.0.2),
+  tibble,
+  tidygraph
 LinkingTo: Rcpp
-RoxygenNote: 6.1.1
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.1

@@ -111,7 +111,7 @@ OK, that is cool.  Now we can see it quite clearly.
 ## Preparing input for srs_identity() and trying it out
 
 The final piece of the puzzle for computing these thigns will be to package up a
-list of the daughers of each internal node so that we can efficiently count up
+list of the daughters of each internal node so that we can efficiently count up
 the number of alleles under each successive, internal node, and do the 
 calculations we wish to for them.  
 
@@ -166,7 +166,8 @@ idxs_tibble <- glommed %>%
 daughters <- idxs_tibble$indices
 names(daughters) <- as.character(idxs_tibble$parent)
 
-# hey! Note that for computing the Fst values, we are going to want to have a daugher-centric
+# hey! Note that for computing the Fst values, we are going
+# to want to have a daughter-centric
 # listing of all the internal nodes. So, let's do that.  HEY! THIS SHOULD BE BASE-1 indexed.
 fst_edges_tib <- glommed %>%
   group_by(parent, daughter) %>%
@@ -189,7 +190,6 @@ system.time(test <- srs_identity("/Users/eriq/Documents/UnsyncedData/chinook-Big
              num_pops = num_pops, 
              num_internal_nodes = num_internal_nodes, 
              daughters = daughters,
-             sample_names = vcf_order$indiv,  # this will be dropped soon.
              BootReps = 10L))
 ```
 

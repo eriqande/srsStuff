@@ -1,0 +1,324 @@
+---
+title: "A quick tutorial on computing population-specific Fst with srsStuff"
+output: 
+  html_notebook:
+    toc: true
+---
+
+# Introduction
+
+This is a hands-on practical session to get you up and running with using
+the srsStuff package to compute population-specific Fst from low-coverage
+whole genome sequencing data. This package uses
+the allele-depths reported in a VCF file to do single-read sampling to allow
+fast and robust calculations.
+
+There are two main steps to computing $F_\mathrm{ST}$ with srsStuff:
+
+1. First you need to prepare data from your VCF files into a flat-text
+format that can be easily parsed by the C++ code engine within srsStuff.
+2. Second, you must prepare the names of the individuals in your sample,
+designating which populations they are in (and also, the relationship
+between those populations, if you are interested in estimating $F_\mathrm{ST}$
+along the internal branches of a tree of populations and "ancestral"
+populations
+
+These topics are covered in the next two sessions.
+
+# VCF Input Data
+
+It is typical to have many VCF files---perhaps one for each chromosome of
+a chromosomal-level assembly.  These have to all be concatenated into a single
+VCF file, and then that file can be filtered however you want to, but most
+importantly, it must be filtered to include **only biallelic markers**.  That
+means biallelic SNPs and indels.  After that filtering the `bcftools query` utility
+is used to write it out to a simple flat text file for use.
+
+I have prepared some sample data for this tutorial: two chromosomes worth
+of bgzipped VCF files from 160 Chinook salmon.  This is about 126 Mb of
+data that is stored in a publicly accessible folder on my CSU google drive:
+[https://drive.google.com/drive/folders/1lrk7IjSyCQrvFj74Zpwcexp3pdRp5Ar4?usp=sharing](https://drive.google.com/drive/folders/1lrk7IjSyCQrvFj74Zpwcexp3pdRp5Ar4?usp=sharing)
+
+If you want to follow along with this tutorial, _including the bcftools portions_,
+you should download the four files:
+```
+NC_037113.1.vcf.gz
+NC_037113.1.vcf.gz.csi
+NC_037114.1.vcf.gz
+NC_037114.1.vcf.gz.csi
+```
+and put them in your `~/Downloads` directory (or wherever you might want them
+if you are working on a cluster...just know that you will have to account for
+the directory change relative to this tutorial.) This tutorial assumes that you have
+downloaded them one at ta time to your `~/Downloads` directory.
+Note: _leave the the VCF files
+gzipped_, and don't use Safari to download them, because that tries to open them
+with your address book application. 
+
+_If you don't want to hassle with the bcftools portion_, you can just
+download the files:
+```
+two-small-chromos-flat.txt.gz
+vcf_sample_names.txt
+````
+Once that is done, _in this case, be sure to_ `gunzip two-small-chromos-flat.txt.gz`.
+
+ 
+
+## Catenating and filtering the VCF files
+
+This is, of course, a job for `bcftools`. Here we chain two commands together:
+
+1. catenate
+2. filter (with bcftools view)
+
+```sh
+cd ~/Downloads
+bcftools concat NC_037113.1.vcf.gz NC_037114.1.vcf.gz | \
+bcftools view -m 2 -M 2 \
+    --min-af 0.01 --max-af 0.99 \
+    -i 'F_MISSING < 0.5'\
+    -Oz > two_small_chromos.vcf.gz
+bcftools index two_small_chromos.vcf.gz
+```
+
+After that, it is useful to get an overview of how many sites and individuals
+we have:
+```sh
+bcftools stats two_small_chromos.vcf.gz | awk '$1=="SN"' 
+```
+Which tells us that we have:
+```
+SN	0	number of samples:	160
+SN	0	number of records:	310664
+SN	0	number of no-ALTs:	0
+SN	0	number of SNPs:	254483
+SN	0	number of MNPs:	0
+SN	0	number of indels:	56181
+SN	0	number of others:	0
+SN	0	number of multiallelic sites:	0
+SN	0	number of multiallelic SNP sites:	0
+```
+Yay! 310,664 sites.  That should take just a couple minutes to run through.
+
+## Extracting the sample names and the allele depths
+
+### Samples names as they appear in the VCF
+
+First, we need to get the sample names in the order that the appear in the VCF
+file.  Once again, this is a job for bcftools:
+```sh
+bcftools query --list-samples two_small_chromos.vcf.gz > vcf_sample_names.txt
+```
+Here is what the first 10 of 160 lines of that file look like:
+```
+DPCh_plate1_A01_S1
+DPCh_plate1_A02_S2
+DPCh_plate1_A03_S3
+DPCh_plate1_A04_S4
+DPCh_plate1_A05_S5
+DPCh_plate1_A06_S6
+DPCh_plate1_A07_S7
+DPCh_plate1_A08_S8
+DPCh_plate1_A09_S9
+DPCh_plate1_A10_S10
+```
+It just holds the sample names, one per line.
+
+### Getting a flat text file of allele depths 
+
+We also need to get the CHROM, POS and the allele depths fields
+for every individual.
+```sh
+bcftools query -f '%CHROM\t%POS[\t%AD]\n' two_small_chromos.vcf.gz > two-small-chromos-flat.txt
+```
+
+# Preparing for srsStuff and $F_\mathrm{ST}$ calculation
+
+## Getting the srsStuff package
+
+First off, you must have the srsStuff package installed.  The easiest
+way to do that is like this:
+```r
+remotes::install_github("eriqande/srsStuff", upgrade = FALSE)
+```
+Note that you need to have all the build tools (like XCode on a Mac) to
+do this, because the package requires C++ compilation.
+
+## Getting information about the individuals
+
+I have included the meta data for these 160 Chinook salmon in the
+srsStuff package.  We can get it like this:
+```{r, message=FALSE}
+library(tidyverse)
+library(srsStuff)
+
+meta_raw <- read_csv(
+  system.file(
+    "extdata/wgs-chinoook-samples-cleaned.csv",
+    package = "srsStuff"
+  )
+)
+```
+This file has the name of each sample and the population that it belongs to.
+The population names are a little cumbersome, so we shorten them up here
+a little bit:
+```{r}
+ meta <- meta_raw %>%
+  mutate(
+    pop = recode(
+      Population,
+      "Salmon River Fall" =  "SalmR-Fall",
+      "Salmon River Spring" =  "SalmR-Spri",
+      "Feather River Hatchery Fall" =  "FeatH-Fall",
+      "Feather River Hatchery Spring" =  "FeatH-Spri",
+      "Trinity River Hatchery Fall" =  "TrinH-Fall",
+      "Trinity River Hatchery Spring" =  "TrinH-Spri",
+      "San Joaquin River Fall" =  "SanJo-Fall",
+      "Coleman Hatchery Late Fall" =  "ColmH-LFal",
+      "Sacramento River Winter" =  "SacrR-Wint",
+      "Butte Creek Spring" =  "ButtC-Spri"
+    )) %>%
+  rename(indiv = vcf_name) %>%
+  select(indiv, pop)
+```
+Now we have a tibble with a column `indiv` that has the sample names
+in it (_as they appear in the VCF file_), and a column `pop` that says
+which population we are putting it into.  Here is what that looks like:
+```{r}
+meta
+```
+## A hierarchical tree of populations (and "ancestral" populations)
+
+One of the peculiar features of srsStuff's $F_\mathrm{ST}$ calculation
+is that it allows you to estimate $F_\mathrm{ST}$ as a change in the
+degree of identity by descent (IBD) that occurs along "population lineages," and
+that includes increase of IBD that occurred in "ancestral" populations.  The upshot
+is that you can place your populations upon a hierarachical tree and then estimate
+branch-specific estimates of $F_\mathrm{ST}$. 
+
+Of course, in order to place your populations in a hierarchical arrangement on a tree
+you need to have some reasonable hypothesis of what that tree might look like. If you
+don't have any idea, then it would make sense to consider all populations as branching
+from a single, common root.  However, often you might have some idea from the evolutionary
+history of your species, and/or from previous analyses (for example PCA analysis or
+calculation of genetic distances).  For example, maybe you study a bird
+(or a fish, for that matter) that has
+migratory and resident populations, and it is well understood that the resident populations
+evolved from the migratory populations in different locations.  Then it would make sense
+to allow the resident and migratory populations from each population share an
+ancestral population, and let those ancestral populations attach to a root at the
+top.  
+
+With our example data, we have populations from two main river basins: the Sacramento and
+the Klamath.  That presents the first division in the tree, since the fish in those basins
+are well-known to be from different lineages.  Within the Sacramento river the Winter Run
+fish are a separate lineage, as is Butte Creek Spring run, but the fall and late fall are
+considered to be part of the same lineage, and so on. The point is, we have a good
+hypothesis for a reasonable hierarchical structure....
+
+But, we still have to _specify_ that structure. We do that with a list in which each
+component of the list pertains to a node in a tree, and the contents of that component
+are the daughters of that node. Here we create that list.
+
+### First level: the populations
+
+This is the easy part.  The `pop` column in `meta` tells us which population each
+individual is in.  We just need to put that into a list format, rather than a tibble.
+Here we do that:
+```{r}
+treelist <- split(x = meta$indiv, f = meta$pop)
+```
+Look at the first two components of that list.  Note that the names of the list
+are the names of the populations, which become the names of the nodes in the tree:
+```{r}
+treelist[1:2]
+```
+The names of all the populations are:
+```{r}
+names(treelist)
+```
+
+### Further levels: the non-population internal nodes of the tree
+
+Now we can put those populations into their own hierarchical groupings.  We
+do that by simply adding more components to `treelist`, successively grouping
+populations into nodes, and those nodes into other nodes, until, ultimately
+we everything has been grouped into the Root node, like this:
+```{r}
+treelist$SalmonR <- c("SalmR-Fall", "SalmR-Spri")
+treelist$TrinityH <- c("TrinH-Fall", "TrinH-Spri")
+treelist$FeatherH <- c("FeatH-Fall", "FeatH-Spri")
+treelist$Klamath <- c("SalmonR", "TrinityH")
+treelist$Sacto_F_LF <- c("FeatherH", "ColmH-LFal", "SanJo-Fall")
+treelist$Sacramento <- c("Sacto_F_LF", "ButtC-Spri", "SacrR-Wint")
+treelist$Root <- c("Sacramento", "Klamath")
+```
+
+### Checking and visualizing the tree
+
+In order for this to work, the tree you make has to be a true tree (i.e. a singly-connected
+graph).  srsStuff has a function called `prepare_treelist` that,
+checks the tree you have input.  It also creates 
+plots of the tree so that you can verify it is shaped the way you think it should be.
+
+We do that with the tree we just made:
+```{r}
+set.seed(1234) # tree layout in the plot is a random, and this value works well
+tree_check <- prepare_treelist(treelist)
+```
+
+Now, print the plot that was made, first without node labels:
+```{r}
+tree_check$plots$tree_without_names
+```
+We see our samples of 16 fish from each of 10 populations.
+
+Here we see it with the internal nodes labelled:
+```{r}
+tree_check$plots$tree_with_names
+```
+
+If you want to see it is a more traditional dendrogram, you can access the
+dendrogram version of the plot:
+```{r, fig.width=6}
+tree_check$plots$dendrogram_with_names
+```
+## Finally, prepare the tree for input to the $F_\mathrm{ST}$ function
+
+Once we are satisfied that our tree is correct, we can run `prepare_treelist()` again
+with the sample names in the order that they appear in the VCF file.  Doing so
+causes the function to convert the tree into an integer-based specification that
+is easy to pass into C++. 
+```{r}
+vcf_names = read_lines("~/Downloads/vcf_sample_names.txt")
+input_for_srs <- prepare_treelist(
+  treelist = treelist, 
+  vcf_names = vcf_names
+)
+```
+
+Just for reference, here is what the integer-representation for input looks like:
+```{r}
+input_for_srs$srs_id_input
+```
+
+# Compute population-specific $F_\mathrm{ST}$
+
+Now we just feed `input_for_srs` and the flat text file of allele depths into
+the function `pop_specific_fst()` to get the $F_\mathrm{ST}$ values.
+We only do 10 bootstrap replicates,
+here, to save time.  But you would typically want to do more.
+On the example data, this takes about 10 seconds.
+```{r}
+Fsts <- pop_specific_fst(
+  in_list = input_for_srs, 
+  AD_file = "~/Downloads/two-small-chromos-flat.txt", 
+  boot_reps = 10
+)
+```
+
+Here is what the output looks like
+```{r}
+Fsts
+```

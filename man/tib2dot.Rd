@@ -4,9 +4,16 @@
 \alias{tib2dot}
 \title{given a tibble specification of the pop-hierarchy, make a dot file of the tree}
 \usage{
-tib2dot(tib, outfile = "tree.dot", names_as_numbers = FALSE,
-  names_on_indivs = FALSE, num_gene_copies = 2, int_fontsize = 50,
-  indiv_size = 0.5, edge_extras = NULL)
+tib2dot(
+  tib,
+  outfile = "tree.dot",
+  names_as_numbers = FALSE,
+  names_on_indivs = FALSE,
+  num_gene_copies = 2,
+  int_fontsize = 50,
+  indiv_size = 0.5,
+  edge_extras = NULL
+)
 }
 \arguments{
 \item{tib}{the tibble}

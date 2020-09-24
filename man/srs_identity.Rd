@@ -4,11 +4,17 @@
 \alias{srs_identity}
 \title{Compute relative ibd measures from single read sampling}
 \usage{
-srs_identity(file, pops_of_indivs, num_pops, num_internal_nodes, daughters,
-  sample_names, BootReps)
+srs_identity(
+  file,
+  pops_of_indivs,
+  num_pops,
+  num_internal_nodes,
+  daughters,
+  BootReps
+)
 }
 \arguments{
-\item{file}{path to the file that holds the Chrom, Pos, [AD] file (i.e. allele_depths.txt
+\item{file}{path to the file that holds the Chrom, Pos, \link{AD} file (i.e. allele_depths.txt
 in the description above).}
 
 \item{pops_of_indivs}{a vector of 0-based indices of the populations each of the individuals
@@ -20,13 +26,10 @@ belongs to. Must be in the order that individuals appear in the VCF file.}
 
 \item{daughters}{a list of vectors.  Each one is the 0-based indexes of the daughters
 of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).}
-
-\item{sample_names}{A character vector of the names of the sample, in the
-order they appear in the VCF file.}
 }
 \value{
 This passes back a list of information about the various allele
-sharing statistics (and, eventually bootstrap information) that can be
+sharing statistics (and bootstrap information) that can be
 used by a higher-level function to compute the F-statistics, etc.
 }
 \description{
@@ -47,31 +50,33 @@ Note that it would not be too hard to modify this to deal with multiple alleles.
 
 If you had all your data in a VCF file called raw.vcf, here is how you would
 process it:
-
-1. Filter it.  Something like this to get biallelic markers typed at over 50\%
-of individuals (i.e., having at least one read at over 50\% of individuals), and
+\enumerate{
+\item Filter it.  Something like this to get biallelic markers typed at over 50\\%
+of individuals (i.e., having at least one read at over 50\\% of individuals), and
 with a minor allele frequency of > 0.05:
+}
 
 \code{bcftools view -m 2 -M 2 --min-af 0.05 --max-af 0.95 -i 'F_MISSING < 0.5' raw.vcf > filtered.vcf}
-
-2. Then extract the allele depths out of that. The will look like 0,1 or 2,1 or,
+\enumerate{
+\item Then extract the allele depths out of that. The will look like 0,1 or 2,1 or,
 if they are missing, they will just be a dot, ".".   So, each row has 2 + N whitespace
 separated values
 on it, (where N is the number of individuals). The first two words on each row
 are Chrom and Pos.  This assumes that the allele depths
 are comma-separated, and that sites missing reads are denoted by a period:
+}
 
 \code{bcftools query -f '\%CHROM\t\%POS[\t\%AD]\n' filtered.vcf > allele_depths.txt}
-
-3. You might want to check that allele_depths has the right number of "words" in it.  So, you
+\enumerate{
+\item You might want to check that allele_depths has the right number of "words" in it.  So, you
 would do \code{wc allele_depths.txt}, and confirm that the second number in the output
 is equal to \eqn{(N + 2) * L}, where \eqn{N} is the number of individuals (samples)
 in the data set, filtered.vcf, and \eqn{L} is the number of markers in filtered.vcf.
 In other words, the file should have L rows, each one with N + 2 columns: 2 for Chrom and
 Pos and then 1 column for each of the N individuals.
-
-4. Then, you call this function, giving it the path to the file allele_depths.txt,
+\item Then, you call this function, giving it the path to the file allele_depths.txt,
 and you also pass in a list of vectors that hold information about the
 hierarchical levels you want to use to be able to compute relative measures of
 identity by descent.
+}
 }
