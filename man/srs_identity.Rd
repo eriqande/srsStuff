@@ -14,7 +14,7 @@ srs_identity(
 )
 }
 \arguments{
-\item{file}{path to the file that holds the Chrom, Pos, \link{AD} file (i.e. allele_depths.txt
+\item{file}{path to the file that holds the Chrom, Pos, and allele depths file (i.e. allele_depths.txt
 in the description above).}
 
 \item{pops_of_indivs}{a vector of 0-based indices of the populations each of the individuals
@@ -26,6 +26,8 @@ belongs to. Must be in the order that individuals appear in the VCF file.}
 
 \item{daughters}{a list of vectors.  Each one is the 0-based indexes of the daughters
 of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).}
+
+\item{BootReps}{the number of Poisson-bootstrap samples to take}
 }
 \value{
 This passes back a list of information about the various allele

@@ -50,7 +50,7 @@ using namespace Rcpp;
 //' hierarchical levels you want to use to be able to compute relative measures of
 //' identity by descent.
 //'
-//' @param file path to the file that holds the Chrom, Pos, [AD] file (i.e. allele_depths.txt
+//' @param file path to the file that holds the Chrom, Pos, and allele depths file (i.e. allele_depths.txt
 //' in the description above).
 //' @param pops_of_indivs a vector of 0-based indices of the populations each of the individuals
 //' belongs to. Must be in the order that individuals appear in the VCF file.
@@ -58,6 +58,7 @@ using namespace Rcpp;
 //' @param num_internal_nodes the number of internal nodes in the tree (this includes the populations)
 //' @param daughters a list of vectors.  Each one is the 0-based indexes of the daughters
 //' of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).
+//' @param BootReps the number of Poisson-bootstrap samples to take
 //' @return This passes back a list of information about the various allele
 //' sharing statistics (and bootstrap information) that can be
 //' used by a higher-level function to compute the F-statistics, etc.

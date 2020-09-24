@@ -1,2 +1,7 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^LICENSE\.md$
+^docs$
+^development$
+^tutorials$
+^R-removed$

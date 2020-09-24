@@ -7,7 +7,7 @@
 srs_covar(file, sample_names, freq_thresh = 0)
 }
 \arguments{
-\item{file}{path to the file that holds the Chrom, Pos, \link{AD} file (i.e. allele_depths.txt
+\item{file}{path to the file that holds the Chrom, Pos, and allele depths file (i.e. \code{allele_depths.txt}
 in the description above).}
 
 \item{sample_names}{A character vector of the names of the sample, in the
@@ -17,7 +17,7 @@ order they appear in the VCF file.}
 of sampled single reads of each type) less than freq_thresh will not be used.}
 }
 \value{
-This passes back a list that includes an N x N covariance matrix ($Cov); a martrix of
+This passes back a list that includes an \eqn{N x N} covariance matrix ($Cov); a martrix of
 proportion of sampled reads identical by state between individuals ($IBS); a matrix of
 number of sites having at least one read in both individuals of the pair ($M); the sample names,
 the frequency threshold used in this function; and a report about the total number of loci
@@ -25,7 +25,8 @@ investigated and used.
 }
 \description{
 This implements the covariance calculation method in ANGSD described at
-\link{http://www.popgen.dk/angsd/index.php/PCA_MDS}, but it does it from
+\url{http://www.popgen.dk/angsd/index.php/PCA_MDS},
+but it does it from
 the allele depth information in a VCF file.  No need to go back to your BAMS, dude!
 }
 \details{
@@ -40,27 +41,27 @@ process it:
 \enumerate{
 \item Filter it.  Something like this to get biallelic markers typed at over 50\\%
 of individuals (i.e., having at least one read at over 50\\% of individuals), and
-with a minor allele frequency of > 0.05:
+with a minor allele frequency of > 0.05:\preformatted{bcftools view \\
+  -m 2 -M 2 \\
+  --min-af 0.05 --max-af 0.95 \\
+  -i 'F_MISSING < 0.5' \\
+  raw.vcf > filtered.vcf
 }
-
-\code{bcftools view -m 2 -M 2 --min-af 0.05 --max-af 0.95 -i 'F_MISSING < 0.5' raw.vcf > filtered.vcf}
-\enumerate{
 \item Then extract the allele depths out of that. The will look like 0,1 or 2,1 or,
 if they are missing, they will just be a dot, ".".   So, each row has 2 + N whitespace
 separated values
 on it, (where N is the number of individuals). The first two words on each row
 are Chrom and Pos.  This assumes that the allele depths
-are comma-separated, and that sites missing reads are denoted by a period:
+are comma-separated, and that sites missing reads are denoted by a period:\preformatted{bcftools query \\
+  -f '\%CHROM\\t\%POS[\\t\%AD]\\n' \\
+  filtered.vcf > allele_depths.txt
 }
-
-\code{bcftools query -f '\%CHROM\t\%POS[\t\%AD]\n' filtered.vcf > allele_depths.txt}
-\enumerate{
 \item You might want to check that allele_depths has the right number of "words" in it.  So, you
-would do \code{wc allele_depths.txt}, and confirm that the second number in the output
+would do \verb{wc allele_depths.txt}, and confirm that the second number in the output
 is equal to \eqn{(N + 2) * L}, where \eqn{N} is the number of individuals (samples)
-in the data set, filtered.vcf, and \eqn{L} is the number of markers in filtered.vcf.
-In other words, the file should have L rows, each one with N + 2 columns: 2 for Chrom and
-Pos and then 1 column for each of the N individuals.
+in the data set, \code{filtered.vcf}, and \eqn{L} is the number of markers in \code{filtered.vcf}.
+In other words, the file should have \eqn{L} rows, each one with \eqn{N + 2} columns: 2 for Chrom and
+Pos and then 1 column for each of the \eqn{N} individuals.
 \item Then, you call this function, giving it the path to the file allele_depths.txt,
 and you also pass in a vector of names for the individuals.
 }
