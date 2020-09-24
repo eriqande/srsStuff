@@ -8,8 +8,14 @@ output:
 # Introduction
 
 This is a hands-on practical session to get you up and running with using
-the srsStuff package to compute population-specific Fst from low-coverage
-whole genome sequencing data. This package uses
+the srsStuff package to compute population-specific $F_\mathrm{ST}$ from low-coverage
+whole genome sequencing data. 
+
+The text version of this Rmarkdown document can be found at GitHub at:
+[https://github.com/eriqande/srsStuff/blob/master/tutorials/pop-spec-Fst-tutorial.Rmd](https://github.com/eriqande/srsStuff/blob/master/tutorials/pop-spec-Fst-tutorial.Rmd).
+
+
+The srsStuff package uses
 the allele-depths reported in a VCF file to do single-read sampling to allow
 fast and robust calculations.
 
@@ -21,9 +27,9 @@ format that can be easily parsed by the C++ code engine within srsStuff.
 designating which populations they are in (and also, the relationship
 between those populations, if you are interested in estimating $F_\mathrm{ST}$
 along the internal branches of a tree of populations and "ancestral"
-populations
+populations).
 
-These topics are covered in the next two sessions.
+These topics are covered in the next two sections.
 
 # VCF Input Data
 
@@ -31,8 +37,8 @@ It is typical to have many VCF files---perhaps one for each chromosome of
 a chromosomal-level assembly.  These have to all be concatenated into a single
 VCF file, and then that file can be filtered however you want to, but most
 importantly, it must be filtered to include **only biallelic markers**.  That
-means biallelic SNPs and indels.  After that filtering the `bcftools query` utility
-is used to write it out to a simple flat text file for use.
+means biallelic SNPs and indels.  After that filtering, the `bcftools query` utility
+is used to write out the allele depths to a simple, tab-delimited, text file for use.
 
 I have prepared some sample data for this tutorial: two chromosomes worth
 of bgzipped VCF files from 160 Chinook salmon.  This is about 126 Mb of
@@ -50,7 +56,7 @@ NC_037114.1.vcf.gz.csi
 and put them in your `~/Downloads` directory (or wherever you might want them
 if you are working on a cluster...just know that you will have to account for
 the directory change relative to this tutorial.) This tutorial assumes that you have
-downloaded them one at ta time to your `~/Downloads` directory.
+downloaded them one at a time to your `~/Downloads` directory.
 Note: _leave the the VCF files
 gzipped_, and don't use Safari to download them, because that tries to open them
 with your address book application. 
@@ -61,7 +67,7 @@ download the files:
 two-small-chromos-flat.txt.gz
 vcf_sample_names.txt
 ````
-Once that is done, _in this case, be sure to_ `gunzip two-small-chromos-flat.txt.gz`.
+If you opted to download those two files then you must decompress `two-small-chromos-flat.txt.gz` with the Unix command `gunzip two-small-chromos-flat.txt.gz`.
 
  
 
@@ -69,9 +75,9 @@ Once that is done, _in this case, be sure to_ `gunzip two-small-chromos-flat.txt
 
 This is, of course, a job for `bcftools`. Here we chain two commands together:
 
-1. catenate
-2. filter (with bcftools view)
-
+1. concatenate (with `bcftools concat`)
+2. filter (with `bcftools view`)
+And then we index the result.
 ```sh
 cd ~/Downloads
 bcftools concat NC_037113.1.vcf.gz NC_037114.1.vcf.gz | \
@@ -106,8 +112,9 @@ Yay! 310,664 sites.  That should take just a couple minutes to run through.
 ### Samples names as they appear in the VCF
 
 First, we need to get the sample names in the order that the appear in the VCF
-file.  Once again, this is a job for bcftools:
+file.  Once again, this is a job for `bcftools`:
 ```sh
+# you should be in the ~/Downloads directory for this
 bcftools query --list-samples two_small_chromos.vcf.gz > vcf_sample_names.txt
 ```
 Here is what the first 10 of 160 lines of that file look like:
@@ -130,6 +137,7 @@ It just holds the sample names, one per line.
 We also need to get the CHROM, POS and the allele depths fields
 for every individual.
 ```sh
+# you should be in the ~/Downloads directory for this
 bcftools query -f '%CHROM\t%POS[\t%AD]\n' two_small_chromos.vcf.gz > two-small-chromos-flat.txt
 ```
 
@@ -184,7 +192,7 @@ a little bit:
 ```
 Now we have a tibble with a column `indiv` that has the sample names
 in it (_as they appear in the VCF file_), and a column `pop` that says
-which population we are putting it into.  Here is what that looks like:
+which population each sample belongs to.  Here is what that looks like:
 ```{r}
 meta
 ```
@@ -206,7 +214,7 @@ calculation of genetic distances).  For example, maybe you study a bird
 (or a fish, for that matter) that has
 migratory and resident populations, and it is well understood that the resident populations
 evolved from the migratory populations in different locations.  Then it would make sense
-to allow the resident and migratory populations from each population share an
+to allow the resident and migratory populations from each population to share an
 ancestral population, and let those ancestral populations attach to a root at the
 top.  
 
@@ -227,7 +235,10 @@ This is the easy part.  The `pop` column in `meta` tells us which population eac
 individual is in.  We just need to put that into a list format, rather than a tibble.
 Here we do that:
 ```{r}
-treelist <- split(x = meta$indiv, f = meta$pop)
+treelist <- split(
+  x = meta$indiv, 
+  f = meta$pop
+)
 ```
 Look at the first two components of that list.  Note that the names of the list
 are the names of the populations, which become the names of the nodes in the tree:
@@ -244,7 +255,7 @@ names(treelist)
 Now we can put those populations into their own hierarchical groupings.  We
 do that by simply adding more components to `treelist`, successively grouping
 populations into nodes, and those nodes into other nodes, until, ultimately
-we everything has been grouped into the Root node, like this:
+everything has been grouped into the Root node, like this:
 ```{r}
 treelist$SalmonR <- c("SalmR-Fall", "SalmR-Spri")
 treelist$TrinityH <- c("TrinH-Fall", "TrinH-Spri")
@@ -264,7 +275,7 @@ plots of the tree so that you can verify it is shaped the way you think it shoul
 
 We do that with the tree we just made:
 ```{r}
-set.seed(1234) # tree layout in the plot is a random, and this value works well
+set.seed(1234) # tree layout in the plot is random, and this value works well
 tree_check <- prepare_treelist(treelist)
 ```
 
@@ -279,7 +290,7 @@ Here we see it with the internal nodes labelled:
 tree_check$plots$tree_with_names
 ```
 
-If you want to see it is a more traditional dendrogram, you can access the
+If you want to see it as a more traditional dendrogram, you can access the
 dendrogram version of the plot:
 ```{r, fig.width=6}
 tree_check$plots$dendrogram_with_names
@@ -289,7 +300,8 @@ tree_check$plots$dendrogram_with_names
 Once we are satisfied that our tree is correct, we can run `prepare_treelist()` again
 with the sample names in the order that they appear in the VCF file.  Doing so
 causes the function to convert the tree into an integer-based specification that
-is easy to pass into C++. 
+is easy to pass into C++. To do this, we must also pass it the names of the individuals
+in the VCF file from which we made the text file of allele depths.
 ```{r}
 vcf_names = read_lines("~/Downloads/vcf_sample_names.txt")
 input_for_srs <- prepare_treelist(
@@ -305,11 +317,11 @@ input_for_srs$srs_id_input
 
 # Compute population-specific $F_\mathrm{ST}$
 
-Now we just feed `input_for_srs` and the flat text file of allele depths into
+Now we just feed `input_for_srs` and the text file of allele depths into
 the function `pop_specific_fst()` to get the $F_\mathrm{ST}$ values.
 We only do 10 bootstrap replicates,
 here, to save time.  But you would typically want to do more.
-On the example data, this takes about 10 seconds.
+On the example data, this takes about 15 seconds.
 ```{r}
 Fsts <- pop_specific_fst(
   in_list = input_for_srs, 
