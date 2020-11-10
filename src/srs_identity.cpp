@@ -59,6 +59,9 @@ using namespace Rcpp;
 //' @param daughters a list of vectors.  Each one is the 0-based indexes of the daughters
 //' of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).
 //' @param BootReps the number of Poisson-bootstrap samples to take
+//' @param dump_pop_Ys an integer.  If it is non-zero then this function will write out the Y's from
+//' each locus, and for each population, to a file.
+//' @param popYdump_file the path to the popYdump_file
 //' @return This passes back a list of information about the various allele
 //' sharing statistics (and bootstrap information) that can be
 //' used by a higher-level function to compute the F-statistics, etc.
@@ -71,7 +74,9 @@ List srs_identity(CharacterVector file,
                   int num_pops,
                   int num_internal_nodes,
                   List daughters,
-                  int BootReps) {
+                  int BootReps,
+                  int dump_pop_Ys,
+                  CharacterVector popYdump_file) {
   int comma, i, j, r, k, d, dp, k1, k2;
   std::string tempstr;
   std::string line;
@@ -79,6 +84,7 @@ List srs_identity(CharacterVector file,
   std::string Pos;
   std::string word;
   std::string fname = Rcpp::as<std::string>(file);
+  std::string dfname = Rcpp::as<std::string>(popYdump_file);
   int N = 0; // counts the individuals
   int L = -1; // counts the markers
   int rdr, rda; // read depth ref / read depth alt
@@ -86,6 +92,7 @@ List srs_identity(CharacterVector file,
   IntegerMatrix allele_mat(BootReps, pops_of_indivs.size());
   int totAlt, totNotMissing; // for computing allele frequency from single reads
   double denom;
+  int num_shorts_written = 0;
 
   // Stuff for keeping track of which individuals have reads of both alleles
   IntegerVector hetIdxs(pops_of_indivs.size());   // vector of length num_indivs, but we only use the first numHets elements, where
@@ -140,6 +147,13 @@ List srs_identity(CharacterVector file,
   // open up a stream to read from the file
   std::ifstream infile (fname.c_str());
 
+  // open up a stream to dump binary Ys to, whether it is called for or not...
+  std::ofstream dumpfile(dfname.c_str(), std::ios::binary);
+  if(!dumpfile) {
+    Rcpp::stop("Failed to open the dumpfile!");
+  }
+
+
   ////////// this code goes line by line in the file and samples //////////
   ////////// a single read from each indiv                            //////////
   while (std::getline(infile, line)) {
@@ -149,7 +163,7 @@ List srs_identity(CharacterVector file,
     ss >> Chrom;  // eat the Chrom name
     ss >> Pos; // eat the position of the variant
 
-    // now, cycle over remaning columns and read them
+    // now, cycle over remaining columns and read them
     N = -1;
     totAlt = 0;
     totNotMissing = 0;
@@ -252,13 +266,28 @@ List srs_identity(CharacterVector file,
           Ytot1(r) += Y1(r, i);
         }
 
+        // IF we are dumping the Y's do that here. Note that we don't dump
+        // all the bootstrap values...
+        if(dump_pop_Ys != 0 && r == 0) {
+          unsigned short tmpshort;
+          //Rcpp::Rcout << "Locus: " << L << " Dumping" << "\n";
+          for(i=0;i<num_pops;i++) {
+            tmpshort = (unsigned short)(Y0(r, i));
+            dumpfile.write((char *) &tmpshort, sizeof(unsigned short));
+            tmpshort = (unsigned short)(Y1(r, i));
+            dumpfile.write((char *) &tmpshort, sizeof(unsigned short));
+            num_shorts_written += 2;
+          }
+        }
+
          // now, cycle over the pops again to compute zsums, etc.
         for(i=0;i<num_pops;i++) {
+
           // Now, only do something with polymorphic loci
           if( !(Ytot0(r) == 0 || Ytot1(r) == 0) ) {
             // we only actually add stuff to the sum when there are at least 2 gene copies that have been sampled
             // from each population.  We should come back and keep track of how many loci actually got used in there,
-            // and also keep track of the averge sample size (number of individuals with reads) across all the internal
+            // and also keep track of the average sample size (number of individuals with reads) across all the internal
             // nodes.  Note that Y0(r, i) + Y1(r, i) should be constant over all r, so I could probably speed up this if() (though not really worth it, I expect)
             if((Y0(r, i) + Y1(r, i)) >= 2) {
               zbar =  (  Y0(r, i) * (Y0(r, i) - 1.0) +  Y1(r, i) * (Y1(r, i) - 1.0) ) /
@@ -329,6 +358,15 @@ List srs_identity(CharacterVector file,
   } // close loop over markers (rows in file)
 
 
+  // Close the dumpfile if we opened one:
+  if(dump_pop_Ys != 0) {
+    dumpfile.close();
+    if(!dumpfile.good()) {
+      Rcpp::Rcerr << "Error.  Dumpfile did not close successfully." << "\n";
+    }
+  }
+
+
   // Now normalize the zsums and return all the stuff that we want to:
   for(i=0;i<BootReps;i++) {
     for(j=0;j<num_internal_nodes;j++) {
@@ -341,6 +379,8 @@ List srs_identity(CharacterVector file,
   List ret;
   ret["zbar"] = zsum;
   ret["zL"] = zL;
+  ret["num_shorts_written"] = num_shorts_written;
+  ret["total_loci"] = L + 1;
 
   return(ret);
 }

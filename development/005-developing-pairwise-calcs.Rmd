@@ -1,0 +1,284 @@
+---
+title: "Trying for a different tree specification"
+output: html_notebook
+---
+
+# Overview 
+
+OK!  Here I want to come up with a reasonable way of doing pairwise pop-specific Fst calculations
+and possibly set the stage for using those to do some kind of heuristic tree inference.
+
+The way I am thinking would work well for this is:
+
+1. first, prepare the data to send to `pop_specific_fst()` as if you wanted
+to estimate pop-specific Fst's from a star phylogeny. Also
+    - no bootstrap reps
+    - pass it a flag (call it `dump_pop_Ys`, that still I must implement)
+    to dump the population Y values.
+2. `pop_specific_fst()` will compute the z_bars for each population and
+for the root, and people can get the simple pop-specific Fst's from the root in that case.  
+3. Additionally, however, the `dump_pop_Ys` flag will also cause the program to
+write out the $Y_{d,\ell,0}$'s and the $Y_{d,\ell, 1}$'s for
+every locus and for every population.  These things are simply integers so I should be able
+to write them to a simple binary file that is not too big.  I think I shall write them
+as `unsigned short`'s which will allow for up to 65,535 individuals in a population.
+5. Once all those $Y$'s are written out, we can use them in another function,
+to read them in and then compute all the pairwise Fst's.  
+
+In order to work on this, we are going to use the data as shown in:
+[https://eriqande.github.io/srsStuff/pop-spec-Fst-tutorial.nb.html#getting-information-about-the-individuals](https://eriqande.github.io/srsStuff/pop-spec-Fst-tutorial.nb.html#getting-information-about-the-individuals)
+
+
+# Getting data together
+
+```{r, message=FALSE}
+library(tidyverse)
+library(srsStuff)
+
+meta_raw <- read_csv(
+  system.file(
+    "extdata/wgs-chinoook-samples-cleaned.csv",
+    package = "srsStuff"
+  )
+)
+```
+This file has the name of each sample and the population that it belongs to.
+The population names are a little cumbersome, so we shorten them up here
+a little bit:
+```{r}
+ meta <- meta_raw %>%
+  mutate(
+    pop = recode(
+      Population,
+      "Salmon River Fall" =  "SalmR-Fall",
+      "Salmon River Spring" =  "SalmR-Spri",
+      "Feather River Hatchery Fall" =  "FeatH-Fall",
+      "Feather River Hatchery Spring" =  "FeatH-Spri",
+      "Trinity River Hatchery Fall" =  "TrinH-Fall",
+      "Trinity River Hatchery Spring" =  "TrinH-Spri",
+      "San Joaquin River Fall" =  "SanJo-Fall",
+      "Coleman Hatchery Late Fall" =  "ColmH-LFal",
+      "Sacramento River Winter" =  "SacrR-Wint",
+      "Butte Creek Spring" =  "ButtC-Spri"
+    )) %>%
+  rename(indiv = vcf_name) %>%
+  select(indiv, pop)
+```
+Now we have a tibble with a column `indiv` that has the sample names
+in it (_as they appear in the VCF file_), and a column `pop` that says
+which population each sample belongs to.
+
+## Make a star-tree
+
+```{r}
+treelist <- split(
+  x = meta$indiv, 
+  f = meta$pop
+)
+
+treelist$root <- names(treelist)
+```
+
+And check it:
+```{r}
+tree_check <- prepare_treelist(treelist)
+tree_check$plots$tree_with_names
+```
+
+Yep. That is what it is supposed to look like.
+
+## Compute pop-specific Fst's like normal
+
+```{r}
+vcf_names = read_lines("~/Documents/UnsyncedData/chinook-read-depths-5.75M-for-fst/sample_names.txt")
+input_for_srs <- prepare_treelist(
+  treelist = treelist, 
+  vcf_names = vcf_names
+)
+```
+
+If I were just to do the calculation like normal it would look like this:
+
+```{r, eval=FALSE}
+Fsts <- pop_specific_fst(
+  in_list = input_for_srs, 
+  AD_file = "~/Downloads/two-small-chromos-flat.txt", 
+  boot_reps = 1 # I need to revamp this so that boot_reps = 0 still gives you the actual one.
+)
+```
+
+But, I want to also dump the Ys.
+
+## Now, playing around with dumping stuff...
+
+This dumps it all, no problem.
+```{r}
+system.time(Fsts2 <- pop_specific_fst(
+  in_list = input_for_srs, 
+  AD_file = "~/Documents/UnsyncedData/chinook-read-depths-5.75M-for-fst/all-chroms-read-depths.txt", 
+  boot_reps = 1, # I need to revamp this so that boot_reps = 0 still gives you the actual one.
+  dump_pop_Ys = TRUE,
+  dump_file = "/tmp/dump_it.bin"
+))
+```
+
+And now, I am going to play around with a function
+that reads the dumpfile. I just want to
+make sure that it looks right.
+
+```{r}
+system.time(pffd <- pairwise_fst_from_dumpfile(
+  file = Fsts2$dumpfile, 
+  num_shorts = Fsts2$srs_id_output$num_shorts_written,
+  L = Fsts2$srs_id_output$total_loci,
+  num_pops = Fsts2$in_list$srs_id_input$num_pops
+))
+
+# then get the pairwise Fst's from that
+pwFs <- fst_ize_pffd(pffd, treelist)
+
+```
+
+### A Function to find Cycles of different ranks
+
+Down below I found that a graphical representation of this was
+reasonable for finding cycles that represent pairs coming
+together in the tree.  (And possibly trios, etc.)
+
+So, I will make a function that takes pwFs tibble and finds cycles.  I'll work on it here:
+```{r}
+
+# first, we make a list of directed edges going from each population's
+# lowest psFst to the population it shares that with.  The names are the
+# parents and the values are the daughters.
+D1 <- pwFs %>%
+  select(Pop1, Pop2, fst1, fst2)
+D2 <- D1
+names(D2) <- c("Pop2", "Pop1", "fst2", "fst1")
+
+D3 <- bind_rows(D1, D2) %>%
+  arrange(Pop1, fst1) %>%
+  group_by(Pop1) %>%
+  mutate(rank = 1:n()) %>%
+  ungroup()
+
+# and we can put those in an edgelist according to rank1
+D3r1 <- D3 %>%
+  filter(rank == 1)
+
+
+pp <- as.list(D3r1$Pop2)
+names(pp) <- D3r1$Pop1
+
+# now, pp is essentially an edgelist.  First, find the two_cycles
+two_cycles <- n_cycles(pp, 2)
+```
+
+What I am thinking is that we first look for 2-cycles.  If we find any,
+then we merge them, and recompute Fst's.  Then we look for 2-cycles again.
+If we don't find any, we look for three cycles, and so forth.  Three-cycles
+get resolved as trichotomies.  
+
+Now, we actually want to get the lowest pairwise for each population as
+the focal population, which means getting pairs in both directions.
+```{r}
+D1 <- pwFs %>%
+  select(Pop1, Pop2, fst1, fst2)
+D2 <- D1
+names(D2) <- c("Pop2", "Pop1", "fst2", "fst1")
+
+D3 <- bind_rows(D1, D2) %>%
+  arrange(Pop1, fst1) %>%
+  group_by(Pop1) %>%
+  mutate(rank = 1:n())
+
+# and we can look at those:
+D3
+```
+
+Now, one possibility would be to connect the populations that are mutually
+the closest pair (if any).
+```{r}
+tops <- D3 %>%
+  group_by(Pop1) %>%
+  slice(1)
+
+tops_r <- tops %>%
+  select(Pop1, Pop2)
+names(tops_r) <- c("Pop2", "Pop1")
+
+semi_join(tops, tops_r)
+```
+
+
+
+### A graphical representation of all this
+
+I am starting to see a connection between what I have done above
+and finding directed cycles in a graph.  If we just draw directed arrows
+between each node and the node it has its lowest pop-specific Fst with,
+then the four populations above should be the ones that come out as
+being involved in two directed two-cycles.  That is cool.  Let's try to visualize
+that.
+
+```{r}
+library(tidygraph)
+library(ggraph)
+
+tg_leaves <- as_tbl_graph(D3, directed = TRUE)
+
+tg_leaves %>% 
+  activate(edges) %>% 
+  filter(rank <= 1) %>%
+  ggraph() + 
+  geom_node_label(aes(label = name)) +
+  geom_edge_arc(
+    aes(
+      colour = factor(rank),
+      start_cap = label_rect(node1.name),
+      end_cap = label_rect(node2.name)
+    ),
+    arrow = arrow(length = unit(3.5, 'mm'))
+  )
+
+
+
+```
+
+Note that up to Rank = 3, the arrows all stay in the separate basins:
+```{r}
+tg_leaves %>% 
+  activate(edges) %>% 
+  filter(rank <= 3) %>%
+  ggraph() + 
+  geom_node_label(aes(label = name)) +
+  geom_edge_arc(
+    aes(
+      colour = factor(rank),
+      start_cap = label_rect(node1.name),
+      end_cap = label_rect(node2.name)
+    ),
+    arrow = arrow(length = unit(3.5, 'mm'))
+  )
+```
+
+But, once you get to rank4 the klamath pops start reaching out (as they must...)
+```{r}
+tg_leaves %>% 
+  activate(edges) %>% 
+  filter(rank == 4) %>%
+  ggraph() + 
+  geom_node_label(aes(label = name)) +
+  geom_edge_arc(
+    aes(
+      colour = factor(rank),
+      start_cap = label_rect(node1.name),
+      end_cap = label_rect(node2.name)
+    ),
+    arrow = arrow(length = unit(3.5, 'mm'))
+  )
+```
+
+And they all point to ButtC-Spri, which is likely a consequence of some
+lowered diversity there.  
+

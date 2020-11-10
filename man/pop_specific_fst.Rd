@@ -4,7 +4,13 @@
 \alias{pop_specific_fst}
 \title{Compute population-specific Fst's for populations arranged on a hierarchical tree}
 \usage{
-pop_specific_fst(in_list, AD_file, boot_reps = 100)
+pop_specific_fst(
+  in_list,
+  AD_file,
+  boot_reps = 100,
+  dump_pop_Ys = FALSE,
+  dump_file = tempfile()
+)
 }
 \arguments{
 \item{in_list}{a list of inputs like that returned from \code{prepare_treelist()}.}
@@ -13,6 +19,13 @@ pop_specific_fst(in_list, AD_file, boot_reps = 100)
 file must be ordered according to the vcf_names passed to \code{prepare_treelist()}.}
 
 \item{boot_reps}{the number of Poisson bootstrap samples to compute Fst for.}
+
+\item{dump_pop_Ys}{if TRUE, then this will write out the allele counts at each
+locus at each population.}
+
+\item{dump_file}{the path to the file to dump the Ys into.  By default, this
+is set to a temporary file by R.  But, if you don't want it to disappear between
+R sessions, you can put is somewhere else.}
 }
 \description{
 Need to write more

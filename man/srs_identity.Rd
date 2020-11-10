@@ -10,7 +10,9 @@ srs_identity(
   num_pops,
   num_internal_nodes,
   daughters,
-  BootReps
+  BootReps,
+  dump_pop_Ys,
+  popYdump_file
 )
 }
 \arguments{
@@ -28,6 +30,11 @@ belongs to. Must be in the order that individuals appear in the VCF file.}
 of the non-population internal nodes. Here 0 corresponds to the first internal node (the first population).}
 
 \item{BootReps}{the number of Poisson-bootstrap samples to take}
+
+\item{dump_pop_Ys}{an integer.  If it is non-zero then this function will write out the Y's from
+each locus, and for each population, to a file.}
+
+\item{popYdump_file}{the path to the popYdump_file}
 }
 \value{
 This passes back a list of information about the various allele

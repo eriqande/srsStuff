@@ -5,6 +5,20 @@
 
 using namespace Rcpp;
 
+// pairwise_fst_from_dumpfile
+List pairwise_fst_from_dumpfile(CharacterVector file, int num_shorts, int L, int num_pops);
+RcppExport SEXP _srsStuff_pairwise_fst_from_dumpfile(SEXP fileSEXP, SEXP num_shortsSEXP, SEXP LSEXP, SEXP num_popsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< CharacterVector >::type file(fileSEXP);
+    Rcpp::traits::input_parameter< int >::type num_shorts(num_shortsSEXP);
+    Rcpp::traits::input_parameter< int >::type L(LSEXP);
+    Rcpp::traits::input_parameter< int >::type num_pops(num_popsSEXP);
+    rcpp_result_gen = Rcpp::wrap(pairwise_fst_from_dumpfile(file, num_shorts, L, num_pops));
+    return rcpp_result_gen;
+END_RCPP
+}
 // srs_covar
 List srs_covar(CharacterVector file, CharacterVector sample_names, double freq_thresh);
 RcppExport SEXP _srsStuff_srs_covar(SEXP fileSEXP, SEXP sample_namesSEXP, SEXP freq_threshSEXP) {
@@ -19,8 +33,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // srs_identity
-List srs_identity(CharacterVector file, IntegerVector pops_of_indivs, int num_pops, int num_internal_nodes, List daughters, int BootReps);
-RcppExport SEXP _srsStuff_srs_identity(SEXP fileSEXP, SEXP pops_of_indivsSEXP, SEXP num_popsSEXP, SEXP num_internal_nodesSEXP, SEXP daughtersSEXP, SEXP BootRepsSEXP) {
+List srs_identity(CharacterVector file, IntegerVector pops_of_indivs, int num_pops, int num_internal_nodes, List daughters, int BootReps, int dump_pop_Ys, CharacterVector popYdump_file);
+RcppExport SEXP _srsStuff_srs_identity(SEXP fileSEXP, SEXP pops_of_indivsSEXP, SEXP num_popsSEXP, SEXP num_internal_nodesSEXP, SEXP daughtersSEXP, SEXP BootRepsSEXP, SEXP dump_pop_YsSEXP, SEXP popYdump_fileSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -30,14 +44,29 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type num_internal_nodes(num_internal_nodesSEXP);
     Rcpp::traits::input_parameter< List >::type daughters(daughtersSEXP);
     Rcpp::traits::input_parameter< int >::type BootReps(BootRepsSEXP);
-    rcpp_result_gen = Rcpp::wrap(srs_identity(file, pops_of_indivs, num_pops, num_internal_nodes, daughters, BootReps));
+    Rcpp::traits::input_parameter< int >::type dump_pop_Ys(dump_pop_YsSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type popYdump_file(popYdump_fileSEXP);
+    rcpp_result_gen = Rcpp::wrap(srs_identity(file, pops_of_indivs, num_pops, num_internal_nodes, daughters, BootReps, dump_pop_Ys, popYdump_file));
+    return rcpp_result_gen;
+END_RCPP
+}
+// test_call_by_reference
+List test_call_by_reference(NumericMatrix x);
+RcppExport SEXP _srsStuff_test_call_by_reference(SEXP xSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type x(xSEXP);
+    rcpp_result_gen = Rcpp::wrap(test_call_by_reference(x));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_srsStuff_pairwise_fst_from_dumpfile", (DL_FUNC) &_srsStuff_pairwise_fst_from_dumpfile, 4},
     {"_srsStuff_srs_covar", (DL_FUNC) &_srsStuff_srs_covar, 3},
-    {"_srsStuff_srs_identity", (DL_FUNC) &_srsStuff_srs_identity, 6},
+    {"_srsStuff_srs_identity", (DL_FUNC) &_srsStuff_srs_identity, 8},
+    {"_srsStuff_test_call_by_reference", (DL_FUNC) &_srsStuff_test_call_by_reference, 1},
     {NULL, NULL, 0}
 };
 
