@@ -2,6 +2,7 @@
 
 export(pop_specific_fst)
 export(prepare_treelist)
+export(process_srs_covar_output)
 export(srs_covar)
 export(srs_identity)
 importFrom(Rcpp,sourceCpp)
